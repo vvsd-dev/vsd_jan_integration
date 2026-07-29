@@ -1,0 +1,142 @@
+{
+ "actions": [],
+ "creation": "2026-07-27 16:30:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "container_no",
+  "chassis_nos",
+  "forwarding",
+  "inspection",
+  "repair_cost",
+  "vanning",
+  "freight_and_other",
+  "car_value",
+  "cont_price",
+  "column_break_xhyy",
+  "thc",
+  "freight",
+  "jpn_expense",
+  "car_expense",
+  "transportation",
+  "cars",
+  "cont_other_value",
+  "inv_other_charges",
+  "total"
+ ],
+ "fields": [
+  {
+   "fieldname": "container_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Container No"
+  },
+  {
+   "fieldname": "chassis_nos",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Chassis Nos"
+  },
+  {
+   "fieldname": "thc",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "THC"
+  },
+  {
+   "fieldname": "forwarding",
+   "fieldtype": "Currency",
+   "label": "Forwarding"
+  },
+  {
+   "fieldname": "freight",
+   "fieldtype": "Currency",
+   "label": "Freight"
+  },
+  {
+   "fieldname": "inspection",
+   "fieldtype": "Currency",
+   "label": "Inspection"
+  },
+  {
+   "fieldname": "jpn_expense",
+   "fieldtype": "Currency",
+   "label": "JPN Expense"
+  },
+  {
+   "fieldname": "repair_cost",
+   "fieldtype": "Currency",
+   "label": "Repair Cost"
+  },
+  {
+   "fieldname": "car_expense",
+   "fieldtype": "Currency",
+   "label": "Car Expense"
+  },
+  {
+   "fieldname": "vanning",
+   "fieldtype": "Currency",
+   "label": "Vanning"
+  },
+  {
+   "fieldname": "transportation",
+   "fieldtype": "Currency",
+   "label": "Transportation"
+  },
+  {
+   "fieldname": "freight_and_other",
+   "fieldtype": "Currency",
+   "label": "Freight & Other"
+  },
+  {
+   "fieldname": "cars",
+   "fieldtype": "Int",
+   "label": "Cars"
+  },
+  {
+   "fieldname": "car_value",
+   "fieldtype": "Currency",
+   "label": "Car Value"
+  },
+  {
+   "fieldname": "cont_other_value",
+   "fieldtype": "Currency",
+   "label": "Cont. Other Value"
+  },
+  {
+   "fieldname": "inv_other_charges",
+   "fieldtype": "Currency",
+   "label": "Inv Other Charges"
+  },
+  {
+   "fieldname": "cont_price",
+   "fieldtype": "Currency",
+   "label": "Cont. Price"
+  },
+  {
+   "fieldname": "total",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Total"
+  },
+  {
+   "fieldname": "column_break_xhyy",
+   "fieldtype": "Column Break"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-28 14:52:00.000000",
+ "modified_by": "Administrator",
+ "module": "VSD Jan International Customization",
+ "name": "Container Expense Breakdown",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

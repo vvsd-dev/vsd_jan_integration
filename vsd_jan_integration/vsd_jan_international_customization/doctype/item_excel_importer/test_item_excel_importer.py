@@ -1,0 +1,216 @@
+# Copyright (c) 2026, VV Systems Developer LTD and contributors
+# For license information, please see license.txt
+
+import unittest
+import os
+import openpyxl
+import frappe
+from frappe.tests.utils import FrappeTestCase
+from vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer import (
+	detect_excel_format,
+	parse_mkt_statement_excel,
+	process_mkt_statement,
+	find_item_by_chassis,
+	ensure_supplier,
+)
+
+
+def create_test_item(item_code, chassis_no):
+	if not frappe.db.exists("Item", item_code):
+		for _ in range(3):
+			try:
+				doc = frappe.new_doc("Item")
+				doc.item_code = item_code
+				doc.item_name = item_code
+				doc.item_group = "All Item Groups"
+				doc.stock_uom = "Nos"
+				doc.custom_chassis_no = chassis_no
+				doc.insert(ignore_permissions=True)
+				frappe.db.commit()
+				break
+			except Exception:
+				frappe.db.rollback()
+
+
+class TestItemExcelImporter(FrappeTestCase):
+	def setUp(self):
+		frappe.db.rollback()
+		frappe.clear_cache()
+		# Cancel and delete any existing test Purchase Invoices from prior runs
+		for bill_no in ("INV-CIF-001", "INV-FOB-002"):
+			for pi_name in frappe.db.get_all("Purchase Invoice", filters={"bill_no": bill_no}, pluck="name"):
+				try:
+					pi = frappe.get_doc("Purchase Invoice", pi_name)
+					if pi.docstatus == 1:
+						pi.cancel()
+					pi.delete(ignore_permissions=True)
+					frappe.db.commit()
+				except Exception:
+					frappe.db.rollback()
+
+	def test_cif_mkt_statement_processing(self):
+		# Create existing test vehicle items
+		chassis_1 = "TEST-CIF-CHASSIS-001"
+		item_code_1 = "TOYOTA - TEST-CIF-CHASSIS-001"
+		create_test_item(item_code_1, chassis_1)
+
+		chassis_2 = "TEST-CIF-CHASSIS-002"
+		item_code_2 = "TOYOTA - TEST-CIF-CHASSIS-002"
+		create_test_item(item_code_2, chassis_2)
+
+
+
+
+		file_path = os.path.abspath("test_cif_statement.xlsx")
+		wb = openpyxl.Workbook()
+		ws = wb.active
+		ws.title = "Statement"
+
+		# Table 0: Header Info
+		ws.append(["Sr#", "Invoice Date", "Invoice No.", "BL/SW", "SUR", "Week"])
+		ws.append([1, "04-02-2026", "INV-CIF-001", "MEDUW-BL-12345", "N", "WK6-26"])
+		ws.append([])
+
+		# Table 1: Full Invoice Value (2 containers for INV-CIF-001: 1 car in cont 1, 1 car in cont 2)
+		ws.append(["Full Invoice Value - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
+		ws.append(["Container No.", "THC", "Forwarding", "Freight", "Inspection", "JPN Expense", "Repair Cost", "Car Expense", "Vanning", "Transportation", "Freight & Other", "Cars", "Car Value", "Cont. Other Value", "Cont. Price", "Total", "Invoice No."])
+		ws.append(["MSDU1112223", 5000, 10000, 15000, 2000, 0, 0, 0, 3000, 0, 0, 1, 500000, 0, 535000, 535000, "INV-CIF-001"])
+		ws.append(["MSDU4445556", 6000, 12000, 18000, 1000, 0, 0, 0, 4000, 0, 0, 1, 400000, 0, 441000, 441000, "INV-CIF-001"])
+		ws.append([])
+
+		# Table 2: Invoice Cars (2 existing chassis, 1 non-existing chassis)
+		ws.append(["Invoice Cars - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
+		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Invoice No.", "Invoice Date"])
+		ws.append([1, "999001", chassis_1, 500000, "INV-CIF-001", "04-02-2026"])
+		ws.append([2, "999002", chassis_2, 400000, "INV-CIF-001", "04-02-2026"])
+		ws.append([3, "999003", "MISSING-CHASSIS-999", 300000, "INV-CIF-001", "04-02-2026"])
+
+		wb.save(file_path)
+
+		try:
+			self.assertEqual(detect_excel_format(file_path), "MKT Statement")
+
+			res = process_mkt_statement(file_path, create_lcv=False)
+			self.assertTrue(res["created_pi"] + res["updated_pi"] >= 1)
+
+
+			# Verify Item updates
+			cont_1 = frappe.db.get_value("Item", item_code_1, "custom_container_no")
+			bl_1 = frappe.db.get_value("Item", item_code_1, "custom_bl")
+			price_1 = frappe.db.get_value("Item", item_code_1, "custom_price")
+			self.assertEqual(cont_1, "MSDU1112223")
+			self.assertEqual(bl_1, "MEDUW-BL-12345")
+			self.assertEqual(float(price_1), 500000.0)
+
+			cont_2 = frappe.db.get_value("Item", item_code_2, "custom_container_no")
+			bl_2 = frappe.db.get_value("Item", item_code_2, "custom_bl")
+			price_2 = frappe.db.get_value("Item", item_code_2, "custom_price")
+			self.assertEqual(cont_2, "MSDU4445556")
+			self.assertEqual(bl_2, "MEDUW-BL-12345")
+			self.assertEqual(float(price_2), 400000.0)
+
+
+			# Verify missing car item was NOT created in database
+			self.assertFalse(frappe.db.exists("Item", "CAR-MISSING-CHASSIS-999"))
+			self.assertFalse(frappe.db.exists("Item", "MISSING-CHASSIS-999"))
+
+			# Verify Purchase Invoice
+			pi_name = frappe.db.get_value("Purchase Invoice", {"bill_no": "INV-CIF-001"}, "name")
+			self.assertTrue(pi_name)
+			pi_doc = frappe.get_doc("Purchase Invoice", pi_name)
+			self.assertEqual(pi_doc.custom_bl_sw, "MEDUW-BL-12345")
+
+			# Items should contain ONLY the 2 valid car items
+			self.assertEqual(len(pi_doc.items), 2)
+			self.assertEqual(pi_doc.items[0].item_code, item_code_1)
+			self.assertEqual(pi_doc.items[0].custom_container_no, "MSDU1112223")
+			item_bl = pi_doc.items[0].get("custom_blsw") or pi_doc.items[0].get("blsw") or pi_doc.items[0].get("custom_bl")
+			self.assertEqual(item_bl, "MEDUW-BL-12345")
+
+
+			item_bl_2 = pi_doc.items[1].get("custom_blsw") or pi_doc.items[1].get("blsw") or pi_doc.items[1].get("custom_bl")
+			self.assertEqual(item_bl_2, "MEDUW-BL-12345")
+
+
+			# Taxes table should contain the total expense charges across both containers
+			self.assertTrue(len(pi_doc.taxes) > 0)
+			tax_dict = {t.description: float(t.tax_amount) for t in pi_doc.taxes}
+			self.assertEqual(tax_dict.get("THC"), 11000.0)
+			self.assertEqual(tax_dict.get("Forwarding"), 22000.0)
+			self.assertEqual(tax_dict.get("Freight"), 33000.0)
+			self.assertEqual(tax_dict.get("Inspection"), 3000.0)
+			self.assertEqual(tax_dict.get("Vanning"), 7000.0)
+
+			# Verify container breakdown table on PI
+			self.assertEqual(len(pi_doc.custom_container_breakdown), 2)
+
+		finally:
+			if os.path.exists(file_path):
+				os.remove(file_path)
+
+	def test_fob_mkt_statement_processing(self):
+		test_chassis = "TEST-FOB-CHASSIS-002"
+		test_item_code = "NISSAN - TEST-FOB-CHASSIS-002"
+		create_test_item(test_item_code, test_chassis)
+
+		file_path = os.path.abspath("test_fob_statement.xlsx")
+		wb = openpyxl.Workbook()
+		ws = wb.active
+
+		# Table 0
+		ws.append(["Sr#", "Invoice Date", "Invoice No.", "BL/SW", "SUR", "Week"])
+		ws.append([1, "05-02-2026", "INV-FOB-002", "MEDUW-BL-67890", "N", "WK6-26"])
+		ws.append([])
+
+		# Table 1
+		ws.append(["Full Invoice Value - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
+		ws.append(["Container No.", "THC", "Forwarding", "Freight", "Inspection", "JPN Expense", "Repair Cost", "Car Expense", "Vanning", "Transportation", "Freight & Other", "Cars", "Car Value", "Cont. Other Value", "Cont. Price", "Total", "Invoice No."])
+		ws.append(["MSDU3334445", 8000, 12000, 20000, 0, 0, 0, 0, 0, 0, 0, 1, 600000, 0, 640000, 640000, "INV-FOB-002"])
+		ws.append([])
+
+		# Table 2
+		ws.append(["Invoice Cars - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
+		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Invoice No.", "Invoice Date"])
+		ws.append([1, "999003", test_chassis, 600000, "INV-FOB-002", "05-02-2026"])
+
+		wb.save(file_path)
+
+		try:
+			res = process_mkt_statement(file_path, create_lcv=True)
+			if res["created_pi"] + res["updated_pi"] < 1:
+				print("FOB IMPORT LOG:", res["log"], "FAILED RECORDS:", res.get("failed_records"))
+			self.assertTrue(res["created_pi"] + res["updated_pi"] >= 1)
+			self.assertTrue(res["created_lcv"] >= 1)
+
+
+			pi_name = frappe.db.get_value("Purchase Invoice", {"bill_no": "INV-FOB-002"}, "name")
+			self.assertTrue(pi_name)
+			pi_doc = frappe.get_doc("Purchase Invoice", pi_name)
+			self.assertEqual(pi_doc.custom_bl_sw, "MEDUW-BL-67890")
+
+			# Taxes are always added to Purchase Invoice (no more FOB/CIF split)
+			self.assertTrue(len(pi_doc.taxes) > 0)
+
+			# Landed Cost Voucher created for PI
+			lcv_name = frappe.db.get_value("Landed Cost Purchase Receipt", {"receipt_document": pi_name}, "parent")
+			self.assertTrue(lcv_name)
+			lcv = frappe.get_doc("Landed Cost Voucher", lcv_name)
+			self.assertTrue(len(lcv.taxes) > 0)
+
+		finally:
+			if os.path.exists(file_path):
+				os.remove(file_path)
+
+
+
+def run_test():
+	t = TestItemExcelImporter()
+	t.setUp()
+	t.test_cif_mkt_statement_processing()
+	t.setUp()
+	t.test_fob_mkt_statement_processing()
+	print("ALL TESTS PASSED SUCCESSFULLY!")
+
+
+if __name__ == "__main__":
+	unittest.main()

@@ -1,0 +1,66 @@
+[
+  {
+    "ID": "Purchase Invoice-custom_container_breakdown",
+    "DocType": "Purchase Invoice",
+    "Field Type": "Table",
+    "Label": "Container Breakdown",
+    "Fieldname": "custom_container_breakdown",
+    "Options": "Container Expense Breakdown",
+    "Insert After": "items",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "ID": "Purchase Invoice-custom_bl_sw",
+    "DocType": "Purchase Invoice",
+    "Field Type": "Data",
+    "Label": "BL/SW",
+    "Fieldname": "custom_bl_sw",
+    "Insert After": "bill_no",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "ID": "Purchase Invoice Item-custom_container_no",
+    "DocType": "Purchase Invoice Item",
+    "Field Type": "Data",
+    "Label": "Container No",
+    "Fieldname": "custom_container_no",
+    "Insert After": "item_code",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "ID": "Purchase Invoice Item-custom_blsw",
+    "DocType": "Purchase Invoice Item",
+    "Field Type": "Data",
+    "Label": "BL/SW",
+    "Fieldname": "custom_blsw",
+    "Insert After": "custom_container_no",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "ID": "Purchase Invoice Item-custom_bl",
+    "DocType": "Purchase Invoice Item",
+    "Field Type": "Data",
+    "Label": "BL",
+    "Fieldname": "custom_bl",
+    "Insert After": "custom_blsw",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "ID": "Item-custom_container_no",
+    "DocType": "Item",
+    "Field Type": "Data",
+    "Label": "Container No",
+    "Fieldname": "custom_container_no",
+    "Insert After": "custom_chassis_no",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "ID": "Item-custom_bl",
+    "DocType": "Item",
+    "Field Type": "Data",
+    "Label": "BL/SW",
+    "Fieldname": "custom_bl",
+    "Insert After": "custom_container_no",
+    "Module (for export)": "VSD Jan International Customization"
+  }
+]

@@ -37,16 +37,27 @@ class TestItemExcelImporter(FrappeTestCase):
 		frappe.db.rollback()
 		frappe.clear_cache()
 		# Cancel and delete any existing test Purchase Invoices from prior runs
-		for bill_no in ("INV-CIF-001", "INV-FOB-002"):
-			for pi_name in frappe.db.get_all("Purchase Invoice", filters={"bill_no": bill_no}, pluck="name"):
+		for bill_no in ("INV-CIF-001", "INV-FOB-002", "INV-TEST-003"):
+			pis = frappe.db.get_all("Purchase Invoice", filters={"bill_no": bill_no}, pluck="name")
+			for pi_name in pis:
+				lcvs = frappe.db.get_all("Landed Cost Purchase Receipt", filters={"receipt_document": pi_name}, pluck="parent")
+				for lcv_name in lcvs:
+					try:
+						frappe.db.delete("Landed Cost Item", {"parent": lcv_name})
+						frappe.db.delete("Landed Cost Taxes and Charges", {"parent": lcv_name})
+						frappe.db.delete("Landed Cost Purchase Receipt", {"parent": lcv_name})
+						frappe.db.delete("Landed Cost Voucher", {"name": lcv_name})
+					except Exception:
+						pass
 				try:
-					pi = frappe.get_doc("Purchase Invoice", pi_name)
-					if pi.docstatus == 1:
-						pi.cancel()
-					pi.delete(ignore_permissions=True)
-					frappe.db.commit()
+					frappe.db.delete("Purchase Invoice Item", {"parent": pi_name})
+					frappe.db.delete("Purchase Taxes and Charges", {"parent": pi_name})
+					frappe.db.delete("GL Entry", {"voucher_no": pi_name})
+					frappe.db.delete("Stock Ledger Entry", {"voucher_no": pi_name})
+					frappe.db.delete("Purchase Invoice", {"name": pi_name})
 				except Exception:
-					frappe.db.rollback()
+					pass
+		frappe.db.commit()
 
 	def test_cif_mkt_statement_processing(self):
 		# Create existing test vehicle items
@@ -177,8 +188,6 @@ class TestItemExcelImporter(FrappeTestCase):
 
 		try:
 			res = process_mkt_statement(file_path, create_lcv=True)
-			if res["created_pi"] + res["updated_pi"] < 1:
-				print("FOB IMPORT LOG:", res["log"], "FAILED RECORDS:", res.get("failed_records"))
 			self.assertTrue(res["created_pi"] + res["updated_pi"] >= 1)
 			self.assertTrue(res["created_lcv"] >= 1)
 
@@ -201,6 +210,60 @@ class TestItemExcelImporter(FrappeTestCase):
 			if os.path.exists(file_path):
 				os.remove(file_path)
 
+	def test_ignore_subsequent_tables_in_mkt_statement(self):
+		file_path = os.path.abspath("test_subsequent_tables_statement.xlsx")
+		wb = openpyxl.Workbook()
+		ws = wb.active
+
+		# Table 0: Header Info
+		ws.append(["Sr#", "Invoice Date", "Invoice No.", "BL/SW", "SUR", "Week"])
+		ws.append([1, "04-02-2026", "INV-TEST-003", "MEDUW-BL-99999", "N", "WK6-26"])
+		ws.append([])
+
+		# Table 1: Full Invoice Value
+		ws.append(["Full Invoice Value - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
+		ws.append(["Container No.", "THC", "Forwarding", "Freight", "Inspection", "JPN Expense", "Repair Cost", "Car Expense", "Vanning", "Transportation", "Freight & Other", "Cars", "Car Value", "Cont. Other Value", "Cont. Price", "Total", "Invoice No."])
+		ws.append(["MSDU7778889", 5000, 10000, 15000, 2000, 0, 0, 0, 3000, 0, 0, 1, 500000, 0, 535000, 535000, "INV-TEST-003"])
+		ws.append([])
+
+		# Table 2: Invoice Cars
+		ws.append(["Invoice Cars - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
+		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Invoice No.", "Invoice Date"])
+		ws.append([1, "999101", "VALID-CHASSIS-001", 500000, "INV-TEST-003", "04-02-2026"])
+		ws.append([])
+
+		# Table 3: Container Price (subsequent table)
+		ws.append(["Container Price - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 28-07-2026 )"])
+		ws.append(["Sr#", "Description", "Container Price", "Invoice No.", "Invoice Date", "Container No."])
+		ws.append([1, "Test Container Price", 100000, "INV-TEST-003", "04-02-2026", "MSDU7778889"])
+		ws.append([])
+
+		# Table 4: RORO Cars (subsequent table)
+		ws.append(["RORO Cars - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 28-07-2026 )"])
+		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Invoice Date", "Invoice No."])
+		ws.append([1, "999201", "RORO-CHASSIS-999", 400000, "13-06-2026", "T.TAN001/26RO MOL"])
+		ws.append([])
+
+		# Table 5: Not Invoiced Cars (subsequent table)
+		ws.append(["Not Invoiced Cars - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 28-07-2026 )"])
+		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Purchase Date"])
+		ws.append([1, "999301", "NOT-INV-CHASSIS-888", 300000, "15-06-2026"])
+
+		wb.save(file_path)
+
+		try:
+			invoice_info, container_rows, car_rows = parse_mkt_statement_excel(file_path)
+
+			# Verify that ONLY the car from Invoice Cars table was extracted
+			chassis_list = [c["chassis_no"] for c in car_rows]
+			self.assertIn("VALID-CHASSIS-001", chassis_list)
+			self.assertNotIn("RORO-CHASSIS-999", chassis_list)
+			self.assertNotIn("NOT-INV-CHASSIS-888", chassis_list)
+			self.assertEqual(len(car_rows), 1)
+
+		finally:
+			if os.path.exists(file_path):
+				os.remove(file_path)
 
 
 def run_test():
@@ -209,6 +272,8 @@ def run_test():
 	t.test_cif_mkt_statement_processing()
 	t.setUp()
 	t.test_fob_mkt_statement_processing()
+	t.setUp()
+	t.test_ignore_subsequent_tables_in_mkt_statement()
 	print("ALL TESTS PASSED SUCCESSFULLY!")
 
 

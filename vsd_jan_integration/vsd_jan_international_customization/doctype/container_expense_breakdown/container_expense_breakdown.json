@@ -23,7 +23,8 @@
   "cars",
   "cont_other_value",
   "inv_other_charges",
-  "total"
+  "total",
+  "currency"
  ],
  "fields": [
   {
@@ -42,93 +43,120 @@
    "fieldname": "thc",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "THC"
+   "label": "THC",
+   "options": "currency"
   },
   {
    "fieldname": "forwarding",
    "fieldtype": "Currency",
-   "label": "Forwarding"
+   "label": "Forwarding",
+   "options": "currency"
   },
   {
    "fieldname": "freight",
    "fieldtype": "Currency",
-   "label": "Freight"
+   "label": "Freight",
+   "options": "currency"
   },
   {
    "fieldname": "inspection",
    "fieldtype": "Currency",
-   "label": "Inspection"
+   "label": "Inspection",
+   "options": "currency"
   },
   {
    "fieldname": "jpn_expense",
    "fieldtype": "Currency",
-   "label": "JPN Expense"
+   "label": "JPN Expense",
+   "options": "currency"
   },
   {
    "fieldname": "repair_cost",
    "fieldtype": "Currency",
-   "label": "Repair Cost"
+   "label": "Repair Cost",
+   "options": "currency"
   },
   {
    "fieldname": "car_expense",
    "fieldtype": "Currency",
-   "label": "Car Expense"
+   "label": "Car Expense",
+   "options": "currency"
   },
   {
    "fieldname": "vanning",
    "fieldtype": "Currency",
-   "label": "Vanning"
+   "label": "Vanning",
+   "options": "currency"
   },
   {
    "fieldname": "transportation",
    "fieldtype": "Currency",
-   "label": "Transportation"
+   "label": "Transportation",
+   "options": "currency"
   },
   {
    "fieldname": "freight_and_other",
    "fieldtype": "Currency",
-   "label": "Freight & Other"
+   "label": "Freight & Other",
+   "options": "currency"
   },
   {
    "fieldname": "cars",
    "fieldtype": "Int",
-   "label": "Cars"
+   "label": "Cars",
+   "options": "currency"
   },
   {
    "fieldname": "car_value",
    "fieldtype": "Currency",
-   "label": "Car Value"
+   "label": "Car Value",
+   "options": "currency"
   },
   {
    "fieldname": "cont_other_value",
    "fieldtype": "Currency",
-   "label": "Cont. Other Value"
+   "label": "Cont. Other Value",
+   "options": "currency"
   },
   {
    "fieldname": "inv_other_charges",
    "fieldtype": "Currency",
-   "label": "Inv Other Charges"
+   "label": "Inv Other Charges",
+   "options": "currency"
   },
   {
    "fieldname": "cont_price",
    "fieldtype": "Currency",
-   "label": "Cont. Price"
+   "label": "Cont. Price",
+   "options": "currency"
   },
   {
    "fieldname": "total",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "Total"
+   "label": "Total",
+   "options": "currency"
   },
   {
    "fieldname": "column_break_xhyy",
    "fieldtype": "Column Break"
+  },
+  {
+   "default": "JPY",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Currency",
+   "options": "Currency",
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-07-28 14:52:00.000000",
+ "modified": "2026-07-29 17:29:41.269342",
  "modified_by": "Administrator",
  "module": "VSD Jan International Customization",
  "name": "Container Expense Breakdown",

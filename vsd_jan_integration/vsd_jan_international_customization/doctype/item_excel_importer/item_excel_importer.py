@@ -480,7 +480,6 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 
 
 			if bl_sw:
-				frappe.db.set_value("Purchase Invoice", pi_doc.name, "custom_bl_sw", bl_sw)
 				pi_doc.custom_bl_sw = bl_sw
 
 
@@ -633,12 +632,20 @@ def parse_mkt_statement_excel(file_path):
 			line_text = " ".join(row_str_cells).upper()
 
 			# Section headers
-			if "FULL INVOICE VALUE" in line_text:
+			if "INVOICE CARS" in line_text and "NOT INVOICED" not in line_text and "RORO" not in line_text and "CONTAINER" not in line_text:
+				current_section = "INVOICE_CARS"
+				current_headers = None
+				continue
+			elif "FULL INVOICE VALUE" in line_text and "RORO" not in line_text:
 				current_section = "FULL_INVOICE_VALUE"
 				current_headers = None
 				continue
-			elif "INVOICE CARS" in line_text:
-				current_section = "INVOICE_CARS"
+			elif "ANNEXURE TO MARKET" in line_text or any(kw in line_text for kw in [
+				"CONTAINER PRICE", "RORO CARS", "RORO CHARGES", "CONTAINERS OTHER",
+				"NOT INVOICED", "STOCK IN JAPAN", "TT RECEIPT ON THE WAY",
+				"RORO FULL INVOICE VALUE", "ON THE WAY ADJUSTMENTS"
+			]):
+				current_section = "OTHER"
 				current_headers = None
 				continue
 
@@ -740,7 +747,7 @@ def parse_mkt_statement_excel(file_path):
 
 
 			# Table 0 / Header Mapping (Invoice No -> BL/SW & Date)
-			if any(k in s.upper() for s in row_str_cells for k in ["BL/SW", "BL", "B/L", "BILL OF LADING"]) and any("INVOICE" in s.upper() for s in row_str_cells):
+			if current_section in (None, "HEADER_MAPPING") and any(k in s.upper() for s in row_str_cells for k in ["BL/SW", "BL", "B/L", "BILL OF LADING"]) and any("INVOICE" in s.upper() for s in row_str_cells):
 				current_headers = [clean_str(c) for c in row]
 				current_section = "HEADER_MAPPING"
 				continue

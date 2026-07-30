@@ -64,8 +64,8 @@ def run_import_job(docname, retry_failed_only=False):
 			summary = (
 				f"Detected Format: MKT Statement (Create LCV: {'Yes' if create_lcv else 'No'})\n"
 				f"Summary: Created {res['created_pi']} Purchase Invoices, Updated {res['updated_pi']} Purchase Invoices, "
-				f"Created {res['created_lcv']} Landed Cost Vouchers, Updated {res['updated_items']} Items, "
-				f"Skipped/Errors: {res['errors']}\n\n"
+				f"Created {res['created_lcv']} Landed Cost Vouchers, "
+				f"Not Created: {res.get('not_created_pi_count', 0)} Invoices (Skipped/Errors: {res['errors']})\n\n"
 				+ "\n".join(res['log'])
 			)
 			status = "Completed" if res['errors'] == 0 else "Completed with Errors"
@@ -258,7 +258,8 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 	frappe.clear_cache(doctype="Item")
 	invoice_info, container_rows, car_rows = parse_mkt_statement_excel(file_path)
 
-	log_lines = []
+	created_pi_logs = []
+	not_created_pi_logs = []
 	created_pi = 0
 	updated_pi = 0
 	created_lcv = 0
@@ -280,7 +281,6 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 
 	if retry_chassis:
 		car_rows = [c for c in car_rows if c.get("chassis_no") in retry_chassis]
-		log_lines.append(f"Retrying import for {len(car_rows)} previously failed car records.")
 
 	# Group cars and containers by invoice_no (normalized)
 	invoice_cars_map = {}
@@ -314,60 +314,82 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 		# Assign container numbers per car (handles multi-container invoices)
 		assign_containers_to_cars(cars, conts)
 
-		# 1. Update ONLY existing Items by Chassis No (Do NOT create new Item if missing!)
+		# Existing Purchase Invoice check
+		existing_pi = frappe.db.get_value("Purchase Invoice", {"bill_no": inv_no, "docstatus": ["!=", 2]}, "name")
+
+		# 1. Validate ALL cars under this Invoice No.
+		missing_chassis = []
 		valid_car_items = []
 		for car in cars:
 			chassis_no = car["chassis_no"]
 			car_price = car["car_price"]
 			car_container_no = car.get("container_no", "")
-			try:
-				item_name = find_item_by_chassis(chassis_no)
-				if item_name:
-					item_doc = frappe.get_doc("Item", item_name)
-					item_doc.custom_price = car_price
-					item_doc.standard_rate = car_price
-					if bl_sw:
-						item_doc.custom_bl = bl_sw
-						if hasattr(item_doc, "custom_bl_sw"):
-							item_doc.custom_bl_sw = bl_sw
-					if car_container_no:
-						item_doc.custom_container_no = car_container_no
-					item_doc.save(ignore_permissions=True)
+			item_name = find_item_by_chassis(chassis_no)
+			if item_name:
+				valid_car_items.append({
+					"item_code": item_name,
+					"chassis_no": chassis_no,
+					"car_price": car_price,
+					"container_no": car_container_no,
+				})
+			else:
+				missing_chassis.append(chassis_no)
+				failed_records.append({
+					"chassis_no": chassis_no,
+					"invoice_no": inv_no,
+					"error": f"Item for Chassis No '{chassis_no}' not found in database."
+				})
 
-					# Force persistence to db for Item custom fields
-					item_updates = {"custom_price": car_price, "standard_rate": car_price}
-					if bl_sw:
-						item_updates["custom_bl"] = bl_sw
-					if car_container_no:
-						item_updates["custom_container_no"] = car_container_no
-					frappe.db.set_value("Item", item_name, item_updates)
-
-					updated_items += 1
-					valid_car_items.append({
-						"item_code": item_name,
-						"chassis_no": chassis_no,
-						"car_price": car_price,
-						"container_no": car_container_no,
-					})
-					log_lines.append(f"Updated Item '{item_name}' (Chassis: {chassis_no}) - Price: {car_price}, Container: {car_container_no}, BL/SW: {bl_sw}")
-
-				else:
-					error_count += 1
-					failed_records.append({"chassis_no": chassis_no, "invoice_no": inv_no, "error": f"Item for Chassis No '{chassis_no}' not found in database."})
-					log_lines.append(f"Skipped Chassis No '{chassis_no}': Item not found in database (Items will NOT be auto-created).")
-			except Exception as e:
-				error_count += 1
-				failed_records.append({"chassis_no": chassis_no, "invoice_no": inv_no, "error": str(e)})
-				frappe.log_error(title=f"Error updating Item for Chassis {chassis_no}", message=frappe.get_traceback())
-				log_lines.append(f"Error updating Item {chassis_no}: {str(e)}")
-
-		if not valid_car_items:
-			log_lines.append(f"No existing Items found for Invoice '{inv_no}'. Skipping Purchase Invoice creation.")
+		# If ANY car under this invoice is missing an Item in DB, DO NOT create or update the Purchase Invoice
+		if missing_chassis:
+			error_count += len(missing_chassis)
+			missing_str = ", ".join(f"'{c}'" for c in missing_chassis)
+			reason = f"Item not found in database for Chassis No(s): {missing_str}"
+			if existing_pi:
+				not_created_pi_logs.append(f"Purchase Invoice '{existing_pi}' not updated for Supplier Invoice No: {inv_no}. Reason: {reason}")
+			else:
+				not_created_pi_logs.append(f"Purchase Invoice not created for Supplier Invoice No: {inv_no}. Reason: {reason}")
 			continue
 
-		# 2. Create / Update Purchase Invoice
+		# 2. Update existing Items in DB (Only when all cars in the invoice are valid!)
 		try:
-			existing_pi = frappe.db.get_value("Purchase Invoice", {"bill_no": inv_no, "docstatus": ["!=", 2]}, "name")
+			for car in valid_car_items:
+				item_name = car["item_code"]
+				chassis_no = car["chassis_no"]
+				car_price = car["car_price"]
+				car_container_no = car["container_no"]
+
+				item_doc = frappe.get_doc("Item", item_name)
+				item_doc.custom_price = car_price
+				item_doc.standard_rate = car_price
+				if bl_sw:
+					item_doc.custom_bl = bl_sw
+					if hasattr(item_doc, "custom_bl_sw"):
+						item_doc.custom_bl_sw = bl_sw
+				if car_container_no:
+					item_doc.custom_container_no = car_container_no
+				item_doc.save(ignore_permissions=True)
+
+				item_updates = {"custom_price": car_price, "standard_rate": car_price}
+				if bl_sw:
+					item_updates["custom_bl"] = bl_sw
+				if car_container_no:
+					item_updates["custom_container_no"] = car_container_no
+				frappe.db.set_value("Item", item_name, item_updates)
+				updated_items += 1
+
+		except Exception as e:
+			error_count += 1
+			reason = f"Error updating Item records: {str(e)}"
+			if existing_pi:
+				not_created_pi_logs.append(f"Purchase Invoice '{existing_pi}' not updated for Supplier Invoice No: {inv_no}. Reason: {reason}")
+			else:
+				not_created_pi_logs.append(f"Purchase Invoice not created for Supplier Invoice No: {inv_no}. Reason: {reason}")
+			frappe.log_error(title=f"Error updating Items for Invoice {inv_no}", message=frappe.get_traceback())
+			continue
+
+		# 3. Create / Update Purchase Invoice
+		try:
 			if existing_pi:
 				pi_doc = frappe.get_doc("Purchase Invoice", existing_pi)
 				is_new_pi = False
@@ -384,8 +406,7 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 			if hasattr(pi_doc, "custom_bl_sw"):
 				pi_doc.custom_bl_sw = bl_sw
 
-
-			# Items table contains ONLY the car items with container_no and blsw set on child table
+			# Items table contains ONLY the car items
 			pi_doc.items = []
 			for car in valid_car_items:
 				item_row = pi_doc.append("items", {
@@ -398,9 +419,6 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 				item_row.custom_bl = bl_sw
 				if hasattr(item_row, "blsw"):
 					item_row.blsw = bl_sw
-
-
-
 
 			expense_fields = [
 				("thc", "THC"),
@@ -417,7 +435,7 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 				("inv_other_charges", "Inv Other Charges"),
 			]
 
-			# Always add charges to Purchase Invoice taxes table
+			# Taxes table
 			pi_doc.taxes = []
 			company_expense_account = get_company_expense_account(pi_doc.company)
 			for fieldname, charge_label in expense_fields:
@@ -431,18 +449,14 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 						"category": "Valuation and Total",
 					})
 
-
-			# Build chassis_nos per container from the valid car items
 			cont_chassis_map = {}
 			for car_item in valid_car_items:
 				c_no = car_item.get("container_no", "") or "Unassigned"
 				cont_chassis_map.setdefault(c_no, []).append(car_item.get("chassis_no", ""))
 
-			# Container Breakdown Child Table
 			if hasattr(pi_doc, "custom_container_breakdown"):
 				pi_doc.custom_container_breakdown = []
 				for cont in conts:
-					# Auto-calculate total: sum all expense fields + car_value if Excel total is 0
 					cont_total = cont.get("total", 0)
 					if not cont_total:
 						cont_total = sum(cont.get(fn, 0) for fn in [
@@ -472,55 +486,65 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 						"inv_other_charges": cont.get("inv_other_charges", 0),
 						"cont_price": cont.get("cont_price", 0),
 						"total": cont_total,
+						"currency": pi_doc.currency or "JPY",
 					})
 
 			if pi_doc.docstatus == 0:
 				pi_doc.flags.ignore_mandatory = True
 				pi_doc.save(ignore_permissions=True)
 
-
-			if bl_sw:
-				pi_doc.custom_bl_sw = bl_sw
-
-
+			bl_sw_str = f" (BL/SW: {bl_sw})" if bl_sw else ""
 			if is_new_pi:
 				created_pi += 1
-				log_lines.append(f"Created Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no} (BL/SW: {bl_sw})")
+				created_pi_logs.append(f"Created Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no}{bl_sw_str}")
 			else:
 				updated_pi += 1
-				log_lines.append(f"Updated Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no} (BL/SW: {bl_sw})")
+				created_pi_logs.append(f"Updated Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no}{bl_sw_str}")
 
-			# 3. Submit PI and create Landed Cost Voucher if create_lcv is ticked
+			# 4. Submit PI and create Landed Cost Voucher if create_lcv is ticked
 			if create_lcv:
 				if pi_doc.docstatus == 0:
 					pi_doc.submit()
-					log_lines.append(f"Submitted Purchase Invoice '{pi_doc.name}'")
+					created_pi_logs.append(f"  - Submitted Purchase Invoice '{pi_doc.name}'")
 				total_charges = sum(sum(c.get(fn, 0.0) for fn in [f[0] for f in expense_fields]) for c in conts)
 				if total_charges > 0:
 					lcv = create_or_update_lcv(pi_doc, conts, expense_fields)
 					if lcv:
 						created_lcv += 1
-						log_lines.append(f"Created/Updated Landed Cost Voucher '{lcv.name}' for Purchase Invoice '{pi_doc.name}'")
-				else:
-					log_lines.append(f"No charges found for LCV on Invoice '{pi_doc.name}' — LCV skipped.")
-
-
+						created_pi_logs.append(f"  - Created Landed Cost Voucher '{lcv.name}' for Purchase Invoice '{pi_doc.name}'")
 
 		except Exception as exc:
 			error_count += 1
+			reason = str(exc)
+			if existing_pi:
+				not_created_pi_logs.append(f"Purchase Invoice '{existing_pi}' not updated for Supplier Invoice No: {inv_no}. Reason: {reason}")
+			else:
+				not_created_pi_logs.append(f"Purchase Invoice not created for Supplier Invoice No: {inv_no}. Reason: {reason}")
 			frappe.log_error(title=f"Error processing Purchase Invoice for {inv_no}", message=frappe.get_traceback())
-			log_lines.append(f"Error processing Purchase Invoice for {inv_no}: {str(exc)}")
 
 	frappe.db.commit()
 	frappe.clear_cache()
+
+	# Combine log sections
+	all_logs = []
+	if created_pi_logs:
+		all_logs.append("--- Purchase Invoices Created / Updated ---")
+		all_logs.extend(created_pi_logs)
+		all_logs.append("")
+
+	if not_created_pi_logs:
+		all_logs.append("--- Purchase Invoices Not Created ---")
+		all_logs.extend(not_created_pi_logs)
+		all_logs.append("")
 
 	return {
 		"created_pi": created_pi,
 		"updated_pi": updated_pi,
 		"created_lcv": created_lcv,
 		"updated_items": updated_items,
+		"not_created_pi_count": len(not_created_pi_logs),
 		"errors": error_count,
-		"log": log_lines,
+		"log": all_logs,
 		"failed_records": failed_records,
 	}
 
@@ -831,7 +855,8 @@ def ensure_supplier(supplier_name="JAN JAPAN"):
 		return supplier_name
 	doc = frappe.new_doc("Supplier")
 	doc.supplier_name = supplier_name
-	doc.supplier_group = "All Supplier Groups"
+	doc.supplier_group = frappe.db.get_value("Supplier", supplier_name, "supplier_group") or "All Supplier Groups"
+	doc.currency = frappe.db.get_value("Supplier", supplier_name, "default_currency") or "JPY"
 	doc.insert(ignore_permissions=True)
 	return doc.name
 

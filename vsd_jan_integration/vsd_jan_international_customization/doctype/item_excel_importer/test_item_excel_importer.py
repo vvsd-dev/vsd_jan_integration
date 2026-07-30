@@ -89,12 +89,12 @@ class TestItemExcelImporter(FrappeTestCase):
 		ws.append(["MSDU4445556", 6000, 12000, 18000, 1000, 0, 0, 0, 4000, 0, 0, 1, 400000, 0, 441000, 441000, "INV-CIF-001"])
 		ws.append([])
 
-		# Table 2: Invoice Cars (2 existing chassis, 1 non-existing chassis)
+		# Table 2: Invoice Cars (INV-CIF-001 has 2 existing chassis; INV-CIF-002 has 1 non-existing chassis)
 		ws.append(["Invoice Cars - ANNEXURE TO MARKET STATMENT ( 01-02-2026 - 09-07-2026 )"])
 		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Invoice No.", "Invoice Date"])
 		ws.append([1, "999001", chassis_1, 500000, "INV-CIF-001", "04-02-2026"])
 		ws.append([2, "999002", chassis_2, 400000, "INV-CIF-001", "04-02-2026"])
-		ws.append([3, "999003", "MISSING-CHASSIS-999", 300000, "INV-CIF-001", "04-02-2026"])
+		ws.append([3, "999003", "MISSING-CHASSIS-999", 300000, "INV-CIF-002", "04-02-2026"])
 
 		wb.save(file_path)
 
@@ -125,11 +125,21 @@ class TestItemExcelImporter(FrappeTestCase):
 			self.assertFalse(frappe.db.exists("Item", "CAR-MISSING-CHASSIS-999"))
 			self.assertFalse(frappe.db.exists("Item", "MISSING-CHASSIS-999"))
 
-			# Verify Purchase Invoice
+			# Verify Purchase Invoice for INV-CIF-001 was created
 			pi_name = frappe.db.get_value("Purchase Invoice", {"bill_no": "INV-CIF-001"}, "name")
 			self.assertTrue(pi_name)
 			pi_doc = frappe.get_doc("Purchase Invoice", pi_name)
 			self.assertEqual(pi_doc.custom_bl_sw, "MEDUW-BL-12345")
+
+			# Verify Purchase Invoice for INV-CIF-002 was NOT created
+			pi_name_2 = frappe.db.get_value("Purchase Invoice", {"bill_no": "INV-CIF-002"}, "name")
+			self.assertFalse(pi_name_2)
+
+			# Verify log contains section header and reason for INV-CIF-002
+			log_text = "\n".join(res["log"])
+			self.assertIn("--- Purchase Invoices Created / Updated ---", log_text)
+			self.assertIn("--- Purchase Invoices Not Created ---", log_text)
+			self.assertIn("Purchase Invoice not created for Supplier Invoice No: INV-CIF-002. Reason: Item not found in database for Chassis No(s): 'MISSING-CHASSIS-999'", log_text)
 
 			# Items should contain ONLY the 2 valid car items
 			self.assertEqual(len(pi_doc.items), 2)

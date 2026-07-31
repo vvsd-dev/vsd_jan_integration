@@ -400,9 +400,16 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 				is_new_pi = True
 
 			if pi_doc.docstatus == 0:
+				supplier_currency = frappe.db.get_value("Supplier", supplier_name, "default_currency") or "JPY"
+				if supplier_currency:
+					pi_doc.currency = supplier_currency
 				pi_doc.bill_date = format_date(inv_date) or frappe.utils.today()
 				pi_doc.posting_date = pi_doc.bill_date
 				pi_doc.update_stock = 1
+				pi_doc.set_missing_values()
+				payable_acc = ensure_payable_account(pi_doc.company, pi_doc.currency)
+				if payable_acc:
+					pi_doc.credit_to = payable_acc
 			if hasattr(pi_doc, "custom_bl_sw"):
 				pi_doc.custom_bl_sw = bl_sw
 
@@ -437,13 +444,13 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 
 			# Taxes table
 			pi_doc.taxes = []
-			company_expense_account = get_company_expense_account(pi_doc.company)
 			for fieldname, charge_label in expense_fields:
 				total_charge = sum(c.get(fieldname, 0.0) for c in conts)
 				if total_charge > 0:
+					tax_account = get_tax_expense_account(pi_doc.company, charge_label, pi_doc.currency)
 					pi_doc.append("taxes", {
 						"charge_type": "Actual",
-						"account_head": company_expense_account,
+						"account_head": tax_account,
 						"description": charge_label,
 						"tax_amount": total_charge,
 						"category": "Valuation and Total",
@@ -572,12 +579,12 @@ def create_or_update_lcv(pi_doc, conts, expense_fields):
 		})
 
 		lcv.taxes = []
-		company_expense_account = get_company_expense_account(pi_doc.company)
 		for fieldname, charge_label in expense_fields:
 			amt = sum(c.get(fieldname, 0.0) for c in conts)
 			if amt > 0:
+				tax_account = get_tax_expense_account(pi_doc.company, charge_label, pi_doc.currency)
 				lcv.append("taxes", {
-					"expense_account": company_expense_account,
+					"expense_account": tax_account,
 					"description": charge_label,
 					"amount": amt,
 				})
@@ -616,7 +623,34 @@ def get_company_cost_center(company):
 	return cc
 
 
+def get_tax_expense_account(company, tax_label, target_currency=None):
+	if not company or not tax_label:
+		return get_company_expense_account(company)
 
+	tax_label_clean = str(tax_label).strip().lower()
+
+	if frappe.db.has_column("Company", "custom_tax_expense_accounts"):
+		company_doc = frappe.get_doc("Company", company)
+		mappings = getattr(company_doc, "custom_tax_expense_accounts", []) or []
+
+		# 1. Match tax_name AND target_currency
+		if target_currency:
+			for row in mappings:
+				row_tax = str(row.tax_name or "").strip().lower()
+				if row_tax == tax_label_clean and row.account:
+					acc_curr = row.account_currency or frappe.db.get_value("Account", row.account, "account_currency")
+					if acc_curr == target_currency:
+						return row.account
+
+		# 2. Match tax_name with blank/null or matching currency
+		for row in mappings:
+			row_tax = str(row.tax_name or "").strip().lower()
+			if row_tax == tax_label_clean and row.account:
+				acc_curr = row.account_currency or frappe.db.get_value("Account", row.account, "account_currency")
+				if not acc_curr or not target_currency or acc_curr == target_currency:
+					return row.account
+
+	return get_company_expense_account(company)
 
 
 def get_company_expense_account(company):
@@ -855,10 +889,47 @@ def ensure_supplier(supplier_name="JAN JAPAN"):
 		return supplier_name
 	doc = frappe.new_doc("Supplier")
 	doc.supplier_name = supplier_name
-	doc.supplier_group = frappe.db.get_value("Supplier", supplier_name, "supplier_group") or "All Supplier Groups"
-	doc.currency = frappe.db.get_value("Supplier", supplier_name, "default_currency") or "JPY"
+	doc.supplier_group = "All Supplier Groups"
+	doc.default_currency = "JPY"
 	doc.insert(ignore_permissions=True)
 	return doc.name
+
+
+def ensure_payable_account(company, currency):
+	if not company or not currency:
+		return None
+	# 1. Existing Payable account matching company and currency
+	acc = frappe.db.get_value("Account", {"company": company, "account_type": "Payable", "account_currency": currency, "is_group": 0}, "name")
+	if acc:
+		return acc
+	# 2. Existing Payable account with blank/null currency (allows any currency)
+	acc = frappe.db.get_value("Account", {"company": company, "account_type": "Payable", "account_currency": ["in", ["", None]], "is_group": 0}, "name")
+	if acc:
+		return acc
+	# 3. Create a new Payable Account for foreign currency
+	company_currency = frappe.db.get_value("Company", company, "default_currency")
+	if company_currency and company_currency != currency:
+		parent_payable = frappe.db.get_value("Account", {"company": company, "account_type": "Payable", "is_group": 1}, "name")
+		if not parent_payable:
+			parent_payable = frappe.db.get_value("Account", {"company": company, "root_type": "Liability", "is_group": 1}, "name")
+		if parent_payable:
+			company_abbr = frappe.db.get_value("Company", company, "abbr") or ""
+			acc_name = f"Creditors {currency}"
+			target_name = f"{acc_name} - {company_abbr}" if company_abbr else acc_name
+			if frappe.db.exists("Account", target_name):
+				return target_name
+			try:
+				new_acc = frappe.new_doc("Account")
+				new_acc.account_name = acc_name
+				new_acc.parent_account = parent_payable
+				new_acc.company = company
+				new_acc.account_type = "Payable"
+				new_acc.account_currency = currency
+				new_acc.insert(ignore_permissions=True)
+				return new_acc.name
+			except Exception:
+				pass
+	return None
 
 
 # ==========================================

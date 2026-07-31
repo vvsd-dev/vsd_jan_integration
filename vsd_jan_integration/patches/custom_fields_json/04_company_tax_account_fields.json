@@ -1,0 +1,12 @@
+[
+  {
+    "ID": "Company-custom_tax_expense_accounts",
+    "DocType": "Company",
+    "Field Type": "Table",
+    "Label": "Tax Expense Accounts",
+    "Fieldname": "custom_tax_expense_accounts",
+    "Options": "Company Tax Account",
+    "Insert After": "default_expense_account",
+    "Module (for export)": "VSD Jan International Customization"
+  }
+]

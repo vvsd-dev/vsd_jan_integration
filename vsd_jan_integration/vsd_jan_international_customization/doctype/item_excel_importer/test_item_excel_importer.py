@@ -17,19 +17,13 @@ from vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_
 
 def create_test_item(item_code, chassis_no):
 	if not frappe.db.exists("Item", item_code):
-		for _ in range(3):
-			try:
-				doc = frappe.new_doc("Item")
-				doc.item_code = item_code
-				doc.item_name = item_code
-				doc.item_group = "All Item Groups"
-				doc.stock_uom = "Nos"
-				doc.custom_chassis_no = chassis_no
-				doc.insert(ignore_permissions=True)
-				frappe.db.commit()
-				break
-			except Exception:
-				frappe.db.rollback()
+		doc = frappe.new_doc("Item")
+		doc.item_code = item_code
+		doc.item_name = item_code
+		doc.item_group = "All Item Groups"
+		doc.stock_uom = "Nos"
+		doc.custom_chassis_no = chassis_no
+		doc.insert(ignore_permissions=True)
 
 
 class TestItemExcelImporter(FrappeTestCase):
@@ -275,6 +269,28 @@ class TestItemExcelImporter(FrappeTestCase):
 			if os.path.exists(file_path):
 				os.remove(file_path)
 
+	def test_company_tax_account_resolution(self):
+		from vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer import get_tax_expense_account, get_company_expense_account
+
+		company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
+		default_acc = get_company_expense_account(company)
+
+		# Ensure custom_tax_expense_accounts table can be modified for testing
+		comp_doc = frappe.get_doc("Company", company)
+		if hasattr(comp_doc, "custom_tax_expense_accounts"):
+			comp_doc.append("custom_tax_expense_accounts", {
+				"tax_name": "THC",
+				"account": default_acc,
+				"account_currency": "JPY",
+			})
+			comp_doc.save(ignore_permissions=True)
+
+			matched_acc = get_tax_expense_account(company, "THC", "JPY")
+			self.assertEqual(matched_acc, default_acc)
+
+			fallback_acc = get_tax_expense_account(company, "Unmapped Charge", "JPY")
+			self.assertEqual(fallback_acc, default_acc)
+
 
 def run_test():
 	t = TestItemExcelImporter()
@@ -284,6 +300,8 @@ def run_test():
 	t.test_fob_mkt_statement_processing()
 	t.setUp()
 	t.test_ignore_subsequent_tables_in_mkt_statement()
+	t.setUp()
+	t.test_company_tax_account_resolution()
 	print("ALL TESTS PASSED SUCCESSFULLY!")
 
 

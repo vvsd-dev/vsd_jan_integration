@@ -405,11 +405,12 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 					pi_doc.currency = supplier_currency
 				pi_doc.bill_date = format_date(inv_date) or frappe.utils.today()
 				pi_doc.posting_date = pi_doc.bill_date
-				pi_doc.update_stock = 1
-				pi_doc.set_missing_values()
 				payable_acc = ensure_payable_account(pi_doc.company, pi_doc.currency)
 				if payable_acc:
 					pi_doc.credit_to = payable_acc
+					pi_doc.party_account_currency = frappe.db.get_value("Account", payable_acc, "account_currency") or pi_doc.currency
+				pi_doc.set_missing_values()
+				pi_doc.update_stock = 1
 			if hasattr(pi_doc, "custom_bl_sw"):
 				pi_doc.custom_bl_sw = bl_sw
 

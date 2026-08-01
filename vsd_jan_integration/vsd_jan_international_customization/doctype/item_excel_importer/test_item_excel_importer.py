@@ -275,21 +275,32 @@ class TestItemExcelImporter(FrappeTestCase):
 		company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
 		default_acc = get_company_expense_account(company)
 
-		# Ensure custom_tax_expense_accounts table can be modified for testing
 		comp_doc = frappe.get_doc("Company", company)
 		if hasattr(comp_doc, "custom_tax_expense_accounts"):
+			comp_doc.custom_tax_expense_accounts = []
 			comp_doc.append("custom_tax_expense_accounts", {
-				"tax_name": "THC",
+				"tax_name": "TestTax",
 				"account": default_acc,
 				"account_currency": "JPY",
 			})
 			comp_doc.save(ignore_permissions=True)
 
-			matched_acc = get_tax_expense_account(company, "THC", "JPY")
+			matched_acc = get_tax_expense_account(company, "TestTax", "JPY")
 			self.assertEqual(matched_acc, default_acc)
 
 			fallback_acc = get_tax_expense_account(company, "Unmapped Charge", "JPY")
 			self.assertEqual(fallback_acc, default_acc)
+
+	def test_ensure_item_color_formatting(self):
+		from vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer import ensure_item_color
+
+		color_1 = ensure_item_color("silver blue")
+		self.assertEqual(color_1, "Silver Blue")
+		self.assertTrue(frappe.db.exists("Item Color", "Silver Blue"))
+
+		color_2 = ensure_item_color("DARK GREY")
+		self.assertEqual(color_2, "Dark Grey")
+		self.assertTrue(frappe.db.exists("Item Color", "Dark Grey"))
 
 
 def run_test():
@@ -302,6 +313,8 @@ def run_test():
 	t.test_ignore_subsequent_tables_in_mkt_statement()
 	t.setUp()
 	t.test_company_tax_account_resolution()
+	t.setUp()
+	t.test_ensure_item_color_formatting()
 	print("ALL TESTS PASSED SUCCESSFULLY!")
 
 

@@ -90,7 +90,7 @@ fixtures = [
     }
 ]
 # before_install = "vsd_jan_integration.install.before_install"
-after_install = "vsd_jan_integration.patches.utils.create_custom_fields.execute"
+# after_install = "vsd_jan_integration.patches.utils.create_custom_fields.execute"
 
 # Uninstallation
 # ------------
@@ -103,9 +103,9 @@ after_install = "vsd_jan_integration.patches.utils.create_custom_fields.execute"
 # To set up dependencies/integrations with other apps
 # Name of the app being installed is passed as an argument
 
-after_migrate = [
-    "vsd_jan_integration.patches.utils.create_custom_fields.execute",
-]
+# after_migrate = [
+#     "vsd_jan_integration.patches.utils.create_custom_fields.execute",
+# ]
 # before_app_install = "vsd_jan_integration.utils.before_app_install"
 # after_app_install = "vsd_jan_integration.utils.after_app_install"
 

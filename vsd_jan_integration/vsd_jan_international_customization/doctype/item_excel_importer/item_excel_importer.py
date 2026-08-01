@@ -118,10 +118,11 @@ def process_mukechi_import(file_path):
 	updated_count = 0
 	error_count = 0
 	failed_records = []
+	color_cache = {}
 
 	for idx, row in enumerate(rows, start=2):
 		try:
-			result, item_code = process_row(row)
+			result, item_code = process_row(row, color_cache=color_cache)
 			if result == "created":
 				created_count += 1
 				log_lines.append(f"Row {idx}: Created Item {item_code}")
@@ -173,7 +174,7 @@ def parse_excel_file(file_path):
 		frappe.throw(_("Error reading Excel file with openpyxl: {0}").format(str(e)))
 
 
-def process_row(row):
+def process_row(row, color_cache=None):
 	def get_val(keys):
 		if isinstance(keys, str):
 			keys = [keys]
@@ -204,7 +205,8 @@ def process_row(row):
 	exhibition_no = clean_str(get_val(["EXHIBITION NO", "Exhibition No"]))
 	mukechi = clean_str(get_val(["MUKECHI", "Mukechi"]))
 	model = clean_str(get_val(["MODEL", "Model"]))
-	color = clean_str(get_val(["COLOR", "Color"]))
+	raw_color = clean_str(get_val(["COLOR", "Color", "COLOUR", "Colour"]))
+	color = ensure_item_color(raw_color, cache=color_cache) if raw_color else None
 	mileage = clean_str(get_val(["MILEAGE", "Mileage"]))
 	price = parse_float(get_val(["PRICE", "Price"]))
 	days_since_purchase = parse_int(get_val(["DAYS SINCE PURCHASE", "DAYS SINCE\nPURCHASE", "Days Since Purchase"]))
@@ -213,38 +215,40 @@ def process_row(row):
 	bid_by = clean_str(get_val(["Bid By", "BID BY", "Bid by"]))
 	remarks = clean_str(get_val(["Highest Bids Remarks", "HIGHEST BIDS REMARKS", "Remarks"]))
 
+	item_fields = {
+		"item_name": item_name,
+		"item_group": final_item_group,
+		"custom_purchase_date": purchase_date,
+		"custom_auction_no": auction_no,
+		"custom_auction_company": auction_company,
+		"custom_purchase_company": purchase_company,
+		"custom_exhibition_no": exhibition_no,
+		"custom_mukechi": mukechi,
+		"custom_chassis_no": chassis_no,
+		"custom_model_code": model_code,
+		"custom_maker": maker,
+		"custom_model": model,
+		"custom_color": color,
+		"custom_mileage": mileage,
+		"custom_price": price,
+		"custom_days_since_purchase": days_since_purchase,
+		"custom_loaded_docs_status": loaded_docs_status,
+		"custom_territory": territory,
+		"custom_bid_by": bid_by,
+		"custom_highest_bids_remarks": remarks,
+	}
+
 	if frappe.db.exists("Item", item_code):
-		doc = frappe.get_doc("Item", item_code)
+		frappe.db.set_value("Item", item_code, item_fields)
 		action = "updated"
 	else:
 		doc = frappe.new_doc("Item")
 		doc.item_code = item_code
 		doc.stock_uom = "Nos"
+		doc.update(item_fields)
+		doc.insert(ignore_permissions=True)
 		action = "created"
 
-	doc.item_name = item_name
-	doc.item_group = final_item_group
-
-	doc.custom_purchase_date = purchase_date
-	doc.custom_auction_no = auction_no
-	doc.custom_auction_company = auction_company
-	doc.custom_purchase_company = purchase_company
-	doc.custom_exhibition_no = exhibition_no
-	doc.custom_mukechi = mukechi
-	doc.custom_chassis_no = chassis_no
-	doc.custom_model_code = model_code
-	doc.custom_maker = maker
-	doc.custom_model = model
-	doc.custom_color = color
-	doc.custom_mileage = mileage
-	doc.custom_price = price
-	doc.custom_days_since_purchase = days_since_purchase
-	doc.custom_loaded_docs_status = loaded_docs_status
-	doc.custom_territory = territory
-	doc.custom_bid_by = bid_by
-	doc.custom_highest_bids_remarks = remarks
-
-	doc.save(ignore_permissions=True)
 	return action, item_code
 
 
@@ -266,6 +270,8 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 	updated_items = 0
 	error_count = 0
 	failed_records = []
+	chassis_cache = {}
+	color_cache = {}
 
 	# Filter by failed records if retrying
 	retry_chassis = set()
@@ -324,13 +330,14 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 			chassis_no = car["chassis_no"]
 			car_price = car["car_price"]
 			car_container_no = car.get("container_no", "")
-			item_name = find_item_by_chassis(chassis_no)
+			item_name = find_item_by_chassis(chassis_no, cache=chassis_cache)
 			if item_name:
 				valid_car_items.append({
 					"item_code": item_name,
 					"chassis_no": chassis_no,
 					"car_price": car_price,
 					"container_no": car_container_no,
+					"color": car.get("color"),
 				})
 			else:
 				missing_chassis.append(chassis_no)
@@ -355,26 +362,19 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 		try:
 			for car in valid_car_items:
 				item_name = car["item_code"]
-				chassis_no = car["chassis_no"]
 				car_price = car["car_price"]
 				car_container_no = car["container_no"]
-
-				item_doc = frappe.get_doc("Item", item_name)
-				item_doc.custom_price = car_price
-				item_doc.standard_rate = car_price
-				if bl_sw:
-					item_doc.custom_bl = bl_sw
-					if hasattr(item_doc, "custom_bl_sw"):
-						item_doc.custom_bl_sw = bl_sw
-				if car_container_no:
-					item_doc.custom_container_no = car_container_no
-				item_doc.save(ignore_permissions=True)
 
 				item_updates = {"custom_price": car_price, "standard_rate": car_price}
 				if bl_sw:
 					item_updates["custom_bl"] = bl_sw
 				if car_container_no:
 					item_updates["custom_container_no"] = car_container_no
+				if car.get("color"):
+					color_doc = ensure_item_color(car["color"], cache=color_cache)
+					if color_doc:
+						item_updates["custom_color"] = color_doc
+
 				frappe.db.set_value("Item", item_name, item_updates)
 				updated_items += 1
 
@@ -629,7 +629,7 @@ def get_tax_expense_account(company, tax_label, target_currency=None):
 
 	tax_label_clean = str(tax_label).strip().lower()
 
-	if frappe.db.has_column("Company", "custom_tax_expense_accounts"):
+	try:
 		company_doc = frappe.get_doc("Company", company)
 		mappings = getattr(company_doc, "custom_tax_expense_accounts", []) or []
 
@@ -649,6 +649,8 @@ def get_tax_expense_account(company, tax_label, target_currency=None):
 				acc_curr = row.account_currency or frappe.db.get_value("Account", row.account, "account_currency")
 				if not acc_curr or not target_currency or acc_curr == target_currency:
 					return row.account
+	except Exception:
+		pass
 
 	return get_company_expense_account(company)
 
@@ -862,26 +864,67 @@ def get_cell_by_headers(row_dict, search_keys):
 	return None
 
 
-def find_item_by_chassis(chassis_no):
+def find_item_by_chassis(chassis_no, cache=None):
 	if not chassis_no:
 		return None
 	chassis_no = str(chassis_no).strip()
 
+	if cache is not None and chassis_no in cache:
+		return cache[chassis_no]
+
 	# 1. Custom Chassis No
 	name = frappe.db.get_value("Item", {"custom_chassis_no": chassis_no}, "name")
-	if name:
-		return name
+	if not name:
+		# 2. Exact item_code
+		if frappe.db.exists("Item", chassis_no):
+			name = chassis_no
+		else:
+			# 3. Item Name contains chassis_no
+			name = frappe.db.get_value("Item", [["Item", "item_name", "like", f"%{chassis_no}%"]], "name")
 
-	# 2. Exact item_code
-	if frappe.db.exists("Item", chassis_no):
-		return chassis_no
+	if cache is not None and name:
+		cache[chassis_no] = name
 
-	# 3. Item Name contains chassis_no
-	name = frappe.db.get_value("Item", [["Item", "item_name", "like", f"%{chassis_no}%"]], "name")
-	if name:
-		return name
+	return name
 
-	return None
+
+def ensure_item_color(color_name, cache=None):
+	if not color_name:
+		return None
+
+	raw_str = str(color_name).strip()
+	if not raw_str:
+		return None
+
+	# Format to Title Case Abc e.g. "Silver Blue", "Dark Grey", "Pearl White"
+	formatted = " ".join(word.capitalize() for word in raw_str.split())
+	if not formatted:
+		return None
+
+	if cache is not None and formatted in cache:
+		return cache[formatted]
+
+	# Check if Item Color already exists by color_name
+	existing = frappe.db.get_value("Item Color", {"color_name": formatted}, "name")
+	if not existing:
+		existing = frappe.db.get_value("Item Color", [["Item Color", "color_name", "like", formatted]], "name")
+
+	if existing:
+		if cache is not None:
+			cache[formatted] = existing
+		return existing
+
+	try:
+		doc = frappe.new_doc("Item Color")
+		doc.color_name = formatted
+		doc.insert(ignore_permissions=True)
+		res = doc.name
+	except Exception:
+		res = frappe.db.get_value("Item Color", {"color_name": formatted}, "name") or formatted
+
+	if cache is not None:
+		cache[formatted] = res
+	return res
 
 
 def ensure_supplier(supplier_name="JAN JAPAN"):

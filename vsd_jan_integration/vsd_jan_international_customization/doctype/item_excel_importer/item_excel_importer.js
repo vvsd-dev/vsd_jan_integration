@@ -32,8 +32,17 @@ frappe.ui.form.on('Item Excel Importer', {
 				}).addClass('btn-primary');
 			}
 
-			// Add Retry Failed button if previous run had errors / failed records
+			// Add Export Errored Rows & Retry Failed buttons if previous run had errors / failed records
 			var has_failed = frm.doc.failed_records && frm.doc.failed_records !== '[]' && frm.doc.failed_records !== '{}';
+			if (has_failed) {
+				frm.add_custom_button(__('Export Errored Rows'), function() {
+					var url = frappe.urllib.get_full_url(
+						'/api/method/vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.download_errored_rows?docname=' + encodeURIComponent(frm.doc.name)
+					);
+					window.open(url);
+				}).addClass('btn-secondary');
+			}
+
 			if (has_failed && (frm.doc.import_status === 'Completed with Errors' || frm.doc.import_status === 'Failed')) {
 				frm.add_custom_button(__('Retry Failed'), function() {
 					frappe.confirm(

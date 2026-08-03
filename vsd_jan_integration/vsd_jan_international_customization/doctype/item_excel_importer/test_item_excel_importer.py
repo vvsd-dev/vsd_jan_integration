@@ -302,6 +302,25 @@ class TestItemExcelImporter(FrappeTestCase):
 		self.assertEqual(color_2, "Dark Grey")
 		self.assertTrue(frappe.db.exists("Item Color", "Dark Grey"))
 
+	def test_export_errored_rows(self):
+		from vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer import download_errored_rows
+
+		importer = frappe.new_doc("Item Excel Importer")
+		importer.import_type = "Mukechi"
+		failed = [
+			{"row": 2, "data": {"MAKER": "TOYOTA", "CHASSIS NO": "NZE151-999", "PRICE": 500000}, "error": "Missing Maker"},
+			{"chassis_no": "SH5-888", "invoice_no": "INV-888", "error": "Item not found"}
+		]
+		importer.failed_records = json.dumps(failed)
+		importer.flags.ignore_mandatory = True
+		importer.insert(ignore_permissions=True)
+
+		download_errored_rows(importer.name)
+
+		self.assertEqual(frappe.response["filename"], f"Errored_Rows_{importer.name}.xlsx")
+		self.assertEqual(frappe.response["type"], "binary")
+		self.assertTrue(len(frappe.response["filecontent"]) > 1000)
+
 
 def run_test():
 	t = TestItemExcelImporter()
@@ -315,6 +334,8 @@ def run_test():
 	t.test_company_tax_account_resolution()
 	t.setUp()
 	t.test_ensure_item_color_formatting()
+	t.setUp()
+	t.test_export_errored_rows()
 	print("ALL TESTS PASSED SUCCESSFULLY!")
 
 

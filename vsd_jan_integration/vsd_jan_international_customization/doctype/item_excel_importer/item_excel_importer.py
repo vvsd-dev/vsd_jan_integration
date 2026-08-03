@@ -344,7 +344,8 @@ def process_mkt_statement(file_path, create_lcv=False, retry_failed_only=False, 
 				failed_records.append({
 					"chassis_no": chassis_no,
 					"invoice_no": inv_no,
-					"error": f"Item for Chassis No '{chassis_no}' not found in database."
+					"error": f"Item for Chassis No '{chassis_no}' not found in database.",
+					"data": car,
 				})
 
 		# If ANY car under this invoice is missing an Item in DB, DO NOT create or update the Purchase Invoice
@@ -1040,3 +1041,111 @@ def format_date(val):
 		except ValueError:
 			continue
 	return None
+
+
+@frappe.whitelist()
+def download_errored_rows(docname):
+	doc = frappe.get_doc("Item Excel Importer", docname)
+	if not doc.failed_records:
+		frappe.throw(_("No errored rows found for this importer."))
+
+	try:
+		failed_records = json.loads(doc.failed_records) if isinstance(doc.failed_records, str) else doc.failed_records
+	except Exception:
+		failed_records = []
+
+	if not failed_records or not isinstance(failed_records, list):
+		frappe.throw(_("No errored rows found to export."))
+
+	xlsx_content = generate_errored_rows_xlsx(failed_records)
+
+	file_name = f"Errored_Rows_{doc.name}.xlsx"
+	frappe.response["filename"] = file_name
+	frappe.response["filecontent"] = xlsx_content
+	frappe.response["type"] = "binary"
+
+
+def generate_errored_rows_xlsx(failed_records):
+	import io
+	import openpyxl
+	from openpyxl.styles import Alignment, Font, PatternFill
+	from openpyxl.utils import get_column_letter
+
+	wb = openpyxl.Workbook()
+	ws = wb.active
+	ws.title = "Errored Rows"
+
+	data_keys = []
+	for rec in failed_records:
+		if isinstance(rec, dict):
+			data_dict = rec.get("data")
+			if isinstance(data_dict, dict):
+				for k in data_dict.keys():
+					if k not in data_keys and str(k).lower() not in ("row", "error", "import error"):
+						data_keys.append(k)
+
+	headers = []
+	has_row = any(isinstance(rec, dict) and "row" in rec for rec in failed_records)
+	has_inv = any(isinstance(rec, dict) and "invoice_no" in rec for rec in failed_records) and not any(str(k).lower() == "invoice_no" for k in data_keys)
+	has_chassis = any(isinstance(rec, dict) and "chassis_no" in rec for rec in failed_records) and not any(str(k).lower() == "chassis_no" for k in data_keys)
+
+	if has_row:
+		headers.append("Row")
+	if has_inv:
+		headers.append("Invoice No")
+	if has_chassis:
+		headers.append("Chassis No")
+
+	headers.extend(data_keys)
+	headers.append("Import Error")
+
+	ws.append(headers)
+
+	header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+	header_font = Font(bold=True, color="FFFFFF", size=11)
+	header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+	for cell in ws[1]:
+		cell.fill = header_fill
+		cell.font = header_font
+		cell.alignment = header_align
+
+	error_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+	error_font = Font(color="C00000")
+
+	for rec in failed_records:
+		if not isinstance(rec, dict):
+			continue
+
+		row_data = []
+		data_dict = rec.get("data") if isinstance(rec.get("data"), dict) else {}
+
+		if has_row:
+			row_data.append(rec.get("row", ""))
+		if has_inv:
+			row_data.append(rec.get("invoice_no") or data_dict.get("invoice_no", ""))
+		if has_chassis:
+			row_data.append(rec.get("chassis_no") or data_dict.get("chassis_no", ""))
+
+		for key in data_keys:
+			val = data_dict.get(key, "")
+			row_data.append(val if val is not None else "")
+
+		err_msg = rec.get("error", "")
+		row_data.append(str(err_msg))
+
+		ws.append(row_data)
+
+		last_cell = ws.cell(row=ws.max_row, column=len(row_data))
+		last_cell.fill = error_fill
+		last_cell.font = error_font
+
+	for col in ws.columns:
+		max_len = max(len(str(cell.value or "")) for cell in col)
+		col_letter = get_column_letter(col[0].column)
+		ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 60)
+
+	output = io.BytesIO()
+	wb.save(output)
+	output.seek(0)
+	return output.getvalue()

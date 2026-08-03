@@ -3,6 +3,7 @@
 
 import unittest
 import os
+import json
 import openpyxl
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -30,6 +31,7 @@ class TestItemExcelImporter(FrappeTestCase):
 	def setUp(self):
 		frappe.db.rollback()
 		frappe.clear_cache()
+		ensure_supplier("JAN JAPAN")
 		# Cancel and delete any existing test Purchase Invoices from prior runs
 		for bill_no in ("INV-CIF-001", "INV-FOB-002", "INV-TEST-003"):
 			pis = frappe.db.get_all("Purchase Invoice", filters={"bill_no": bill_no}, pluck="name")

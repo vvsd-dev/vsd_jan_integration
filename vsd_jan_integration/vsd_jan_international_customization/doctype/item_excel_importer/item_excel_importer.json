@@ -7,8 +7,18 @@
  "field_order": [
   "excel_file",
   "import_type",
-  "create_lcv",
   "import_status",
+  "total_invoices",
+  "total_cars",
+  "estimated_time",
+  "column_break_vewl",
+  "auto_submit_purchase_invoice",
+  "auto_submit_journal_entry",
+  "create_lcv",
+  "processed_invoices",
+  "processed_cars",
+  "section_break_wypj",
+  "progress_html",
   "log_section",
   "import_log",
   "failed_records",
@@ -30,8 +40,24 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Import Type",
-   "options": "Auto Detect\nMukechi\nMKT Statement",
-   "reqd": 1
+   "options": "Auto Detect\nMKT Statement\nMukechi\nUnknown Format",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "When checked, created Purchase Invoices will be submitted automatically.",
+   "fieldname": "auto_submit_purchase_invoice",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Auto Submit Purchase Invoice"
+  },
+  {
+   "default": "0",
+   "description": "When checked, created expense Journal Entries will be submitted automatically.",
+   "fieldname": "auto_submit_journal_entry",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Auto Submit Journal Entry"
   },
   {
    "default": "0",
@@ -48,6 +74,45 @@
    "fieldtype": "Select",
    "label": "Import Status",
    "options": "Pending\nQueued\nIn Progress\nCompleted\nCompleted with Errors\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "progress_html",
+   "fieldtype": "HTML",
+   "label": "Progress Status"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_invoices",
+   "fieldtype": "Int",
+   "label": "Total Invoices",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "processed_invoices",
+   "fieldtype": "Int",
+   "label": "Processed Invoices",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "total_cars",
+   "fieldtype": "Int",
+   "label": "Total Cars",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "processed_cars",
+   "fieldtype": "Int",
+   "label": "Processed Cars",
+   "read_only": 1
+  },
+  {
+   "fieldname": "estimated_time",
+   "fieldtype": "Data",
+   "label": "Estimated Time",
    "read_only": 1
   },
   {
@@ -77,11 +142,19 @@
    "print_hide": 1,
    "read_only": 1,
    "report_hide": 1
+  },
+  {
+   "fieldname": "column_break_vewl",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_wypj",
+   "fieldtype": "Section Break"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-28 14:20:00.000000",
+ "modified": "2026-08-12 12:25:25.903911",
  "modified_by": "Administrator",
  "module": "VSD Jan International Customization",
  "name": "Item Excel Importer",

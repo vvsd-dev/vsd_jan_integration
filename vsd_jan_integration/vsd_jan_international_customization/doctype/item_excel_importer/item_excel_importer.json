@@ -7,6 +7,7 @@
  "field_order": [
   "excel_file",
   "import_type",
+  "import_file_number_format",
   "import_status",
   "total_invoices",
   "total_cars",
@@ -42,6 +43,14 @@
    "label": "Import Type",
    "options": "Auto Detect\nMKT Statement\nMukechi\nUnknown Format",
    "read_only": 1
+  },
+  {
+   "default": "Invoice No",
+   "fieldname": "import_file_number_format",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Import File Number Format",
+   "options": "Invoice No\nBL Number\nInvoice No - BL Number"
   },
   {
    "default": "0",

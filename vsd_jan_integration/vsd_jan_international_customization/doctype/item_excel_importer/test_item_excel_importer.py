@@ -45,6 +45,18 @@ class TestItemExcelImporter(FrappeTestCase):
 			except Exception:
 				pass
 
+		# Clean up any test Import Files created in prior runs
+		for if_num in (
+			"INV-CIF-001", "INV-FOB-002", "INV-TEST-003", "INV-RORO-003",
+			"MEDUW-BL-12345", "RORO-BL-88888", "BL-TEST-999",
+			"INV-CIF-001 - MEDUW-BL-12345", "INV-RORO-003 - RORO-BL-88888", "INV-TEST-003 - BL-TEST-999"
+		):
+			if frappe.db.exists("Import File", if_num):
+				try:
+					frappe.db.delete("Import File", {"name": if_num})
+				except Exception:
+					pass
+
 		for bill_no in ("INV-CIF-001", "INV-FOB-002", "INV-TEST-003", "INV-RORO-003"):
 			pis = frappe.db.get_all("Purchase Invoice", filters={"bill_no": bill_no}, pluck="name")
 			for pi_name in pis:
@@ -143,6 +155,17 @@ class TestItemExcelImporter(FrappeTestCase):
 			for acc_row in jv_doc.accounts:
 				self.assertFalse(acc_row.reference_type)
 				self.assertFalse(acc_row.reference_name)
+
+			# Verify Import File for INV-CIF-001 was created
+			if_name = frappe.db.get_value("Import File", {"supplier_invoice_no": "INV-CIF-001"}, "name")
+			self.assertTrue(if_name)
+			if_doc = frappe.get_doc("Import File", if_name)
+			self.assertEqual(if_doc.import_file_number, "INV-CIF-001")
+			self.assertEqual(if_doc.bl_number, "MEDUW-BL-12345")
+			self.assertEqual(if_doc.no_of_containers, "2")
+			self.assertEqual(if_doc.supplier_name, "JAN JAPAN")
+			self.assertEqual(if_doc.supplier_invoice_no, "INV-CIF-001")
+			self.assertEqual(float(if_doc.invoice_amount), 900000.0)
 
 			# Verify summary log format
 			summary_text = res["summary"]
@@ -340,6 +363,72 @@ class TestItemExcelImporter(FrappeTestCase):
 			if os.path.exists(file_path):
 				os.remove(file_path)
 
+	def test_import_file_number_formatting_options(self):
+		from vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer import compute_import_file_number
+
+		# 1. Invoice No (default)
+		self.assertEqual(compute_import_file_number("INV-100", "BL-200", "Invoice No"), "INV-100")
+		self.assertEqual(compute_import_file_number("INV-100", "", "Invoice No"), "INV-100")
+
+		# 2. BL Number
+		self.assertEqual(compute_import_file_number("INV-100", "BL-200", "BL Number"), "BL-200")
+		self.assertEqual(compute_import_file_number("INV-100", "", "BL Number"), "INV-100")  # fallback when no BL
+
+		# 3. Invoice No - BL Number
+		self.assertEqual(compute_import_file_number("INV-100", "BL-200", "Invoice No - BL Number"), "INV-100 - BL-200")
+		self.assertEqual(compute_import_file_number("INV-100", "", "Invoice No - BL Number"), "INV-100")  # fallback when no BL
+
+	def test_mkt_statement_import_file_custom_format(self):
+		chassis_fmt = "TEST-FMT-CHASSIS-001"
+		item_code_fmt = "TOYOTA - TEST-FMT-CHASSIS-001"
+		create_test_item(item_code_fmt, chassis_fmt)
+
+		file_path = os.path.abspath("test_fmt_statement.xlsx")
+		wb = openpyxl.Workbook()
+		ws = wb.active
+		ws.append(["Sr#", "Invoice Date", "Invoice No.", "BL/SW", "SUR", "Week"])
+		ws.append([1, "04-02-2026", "INV-FMT-001", "BL-FMT-888", "N", "WK6-26"])
+		ws.append([])
+		ws.append(["Full Invoice Value - ANNEXURE TO MARKET STATMENT"])
+		ws.append(["Container No.", "THC", "Forwarding", "Freight", "Inspection", "JPN Expense", "Repair Cost", "Car Expense", "Vanning", "Transportation", "Freight & Other", "Cars", "Car Value", "Cont. Other Value", "Cont. Price", "Total", "Invoice No."])
+		ws.append(["MSDU999", 5000, 10000, 15000, 2000, 0, 0, 0, 3000, 0, 0, 1, 500000, 0, 535000, 535000, "INV-FMT-001"])
+		ws.append([])
+		ws.append(["Invoice Cars - ANNEXURE TO MARKET STATMENT"])
+		ws.append(["Sr#", "Stock ID", "Chassis No.", "Car Price", "Invoice No.", "Invoice Date"])
+		ws.append([1, "999001", chassis_fmt, 500000, "INV-FMT-001", "04-02-2026"])
+		wb.save(file_path)
+
+		try:
+			# Test format: "Invoice No - BL Number"
+			res = process_mkt_statement(file_path, create_lcv=False, import_file_number_format="Invoice No - BL Number")
+			self.assertTrue(frappe.db.exists("Import File", "INV-FMT-001 - BL-FMT-888"))
+			if_doc = frappe.get_doc("Import File", "INV-FMT-001 - BL-FMT-888")
+			self.assertEqual(if_doc.import_file_number, "INV-FMT-001 - BL-FMT-888")
+			self.assertEqual(if_doc.bl_number, "BL-FMT-888")
+			self.assertEqual(if_doc.supplier_invoice_no, "INV-FMT-001")
+		finally:
+			if frappe.db.exists("Import File", "INV-FMT-001 - BL-FMT-888"):
+				try:
+					frappe.db.delete("Import File", {"name": "INV-FMT-001 - BL-FMT-888"})
+				except Exception:
+					pass
+			pi_name = frappe.db.get_value("Purchase Invoice", {"bill_no": "INV-FMT-001"}, "name")
+			if pi_name:
+				try:
+					frappe.db.delete("Purchase Invoice Item", {"parent": pi_name})
+					frappe.db.delete("Purchase Invoice", {"name": pi_name})
+				except Exception:
+					pass
+			jv_name = frappe.db.get_value("Journal Entry", {"cheque_no": "INV-FMT-001"}, "name")
+			if jv_name:
+				try:
+					frappe.db.delete("Journal Entry Account", {"parent": jv_name})
+					frappe.db.delete("Journal Entry", {"name": jv_name})
+				except Exception:
+					pass
+			if os.path.exists(file_path):
+				os.remove(file_path)
+
 
 def run_test():
 	t = TestItemExcelImporter()
@@ -357,6 +446,10 @@ def run_test():
 	t.test_supplier_account_resolution()
 	t.setUp()
 	t.test_auto_detect_and_auto_submit()
+	t.setUp()
+	t.test_import_file_number_formatting_options()
+	t.setUp()
+	t.test_mkt_statement_import_file_custom_format()
 	print("ALL TESTS PASSED SUCCESSFULLY!")
 
 

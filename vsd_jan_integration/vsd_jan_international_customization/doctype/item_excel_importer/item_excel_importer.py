@@ -3,6 +3,7 @@
 
 import datetime
 import json
+import os
 import time
 import frappe
 from frappe import _
@@ -76,6 +77,7 @@ def run_import_job(docname, retry_failed_only=False):
 		create_lcv = bool(importer.get("create_lcv"))
 		auto_submit_pi = bool(importer.get("auto_submit_purchase_invoice"))
 		auto_submit_jv = bool(importer.get("auto_submit_journal_entry"))
+		import_file_number_format = importer.get("import_file_number_format") or "Invoice No"
 
 		if detected_format == "Unknown Format":
 			summary = "Import Failed: Excel file format is unrecognized (Unknown Format)."
@@ -92,6 +94,7 @@ def run_import_job(docname, retry_failed_only=False):
 				retry_failed_only=retry_failed_only,
 				prev_failed_records=importer.get("failed_records"),
 				docname=docname,
+				import_file_number_format=import_file_number_format,
 			)
 			summary = res["summary"]
 			status = "Completed" if res["errors"] == 0 else "Completed with Errors"
@@ -420,13 +423,14 @@ EXPENSE_FIELDS = [
 ]
 
 
-def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, auto_submit_jv=False, retry_failed_only=False, prev_failed_records=None, docname=None):
+def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, auto_submit_jv=False, retry_failed_only=False, prev_failed_records=None, docname=None, import_file_number_format="Invoice No"):
 	start_time = time.time()
 
 	frappe.clear_cache(doctype="Purchase Invoice Item")
 	frappe.clear_cache(doctype="Purchase Invoice")
 	frappe.clear_cache(doctype="Journal Entry")
 	frappe.clear_cache(doctype="Item")
+	frappe.clear_cache(doctype="Import File")
 
 	invoice_info, container_rows, car_rows = parse_mkt_statement_excel(file_path)
 
@@ -516,6 +520,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 		auto_submit_jv=auto_submit_jv,
 		total_invoices=total_invoices,
 		start_time=start_time,
+		import_file_number_format=import_file_number_format,
 	)
 
 	car_res = run_car_updating_job(
@@ -535,6 +540,8 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 
 	created_pi = inv_res["created_pi"]
 	updated_pi = inv_res["updated_pi"]
+	created_if = inv_res.get("created_import_files", 0)
+	updated_if = inv_res.get("updated_import_files", 0)
 	created_jv = inv_res["created_jv"]
 	updated_jv = inv_res["updated_jv"]
 	created_lcv = inv_res["created_lcv"]
@@ -547,7 +554,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 
 	all_logs = []
 	if inv_res["created_pi_logs"]:
-		all_logs.append("--- Purchase Invoices & Journal Entries Created / Updated ---")
+		all_logs.append("--- Purchase Invoices, Import Files & Journal Entries Created / Updated ---")
 		all_logs.extend(inv_res["created_pi_logs"])
 		all_logs.append("")
 
@@ -567,6 +574,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 		f"  - Container Full Invoices: {total_container_full} | Container Cars: {total_container_cars}\n"
 		f"  - RORO Full Invoices: {total_roro_full} | RORO Cars: {total_roro_cars}\n"
 		f"  - Purchase Invoices Created: {created_pi} | Updated: {updated_pi}\n"
+		f"  - Import Files Created: {created_if} | Updated: {updated_if}\n"
 		f"  - Journal Entries Created: {created_jv} | Updated: {updated_jv}\n"
 		f"  - Landed Cost Vouchers: {created_lcv}\n"
 		f"  - Time Elapsed: {time_elapsed_str}\n"
@@ -577,6 +585,8 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 	return {
 		"created_pi": created_pi,
 		"updated_pi": updated_pi,
+		"created_import_files": created_if,
+		"updated_import_files": updated_if,
 		"created_jv": created_jv,
 		"updated_jv": updated_jv,
 		"created_lcv": created_lcv,
@@ -594,12 +604,14 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 # SCHEDULER / WORKER 1: INVOICES & JOURNAL ENTRIES
 # ==========================================
 
-def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_lcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time):
+def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_lcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No"):
 	supplier_name = ensure_supplier("JAN JAPAN")
 	created_pi_logs = []
 	not_created_pi_logs = []
 	created_pi = 0
 	updated_pi = 0
+	created_if = 0
+	updated_if = 0
 	created_jv = 0
 	updated_jv = 0
 	created_lcv = 0
@@ -636,6 +648,19 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 		for r in jv_records:
 			if r.cheque_no:
 				existing_jv_map[str(r.cheque_no).strip()] = r.name
+	except Exception:
+		pass
+
+	# Bulk pre-fetch existing Import Files by import_file_number and name
+	existing_import_file_map = {}
+	try:
+		if frappe.db.exists("DocType", "Import File"):
+			if_records = frappe.db.get_all("Import File", fields=["import_file_number", "name"])
+			for r in if_records:
+				if r.import_file_number:
+					existing_import_file_map[str(r.import_file_number).strip()] = r.name
+				if r.name:
+					existing_import_file_map[str(r.name).strip()] = r.name
 	except Exception:
 		pass
 
@@ -790,6 +815,28 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 						"currency": pi_doc.currency or "JPY",
 					})
 
+			# Create or update Import File for this invoice
+			inv_amount = sum(c.get("car_price", 0.0) for c in valid_car_items)
+			import_file_doc, is_new_if = create_or_update_import_file(
+				inv_no=inv_no,
+				bl_sw=bl_sw,
+				supplier_name=supplier_name,
+				currency=pi_doc.currency or "JPY",
+				invoice_amount=inv_amount,
+				conts=conts,
+				format_option=import_file_number_format,
+				existing_import_file_map=existing_import_file_map,
+			)
+
+			if import_file_doc:
+				if is_new_if:
+					created_if += 1
+					created_pi_logs.append(f"  - Created Import File '{import_file_doc.name}'")
+				else:
+					updated_if += 1
+					created_pi_logs.append(f"  - Updated Import File '{import_file_doc.name}'")
+
+				link_import_file_to_doc(pi_doc, import_file_doc.name)
 
 			if pi_doc.docstatus == 0:
 				pi_doc.flags.ignore_mandatory = True
@@ -798,6 +845,9 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				if auto_submit_pi:
 					pi_doc.flags.ignore_mandatory = True
 					pi_doc.submit()
+
+			if import_file_doc:
+				update_doc_import_file_link("Purchase Invoice", pi_doc.name, import_file_doc.name)
 
 			bl_sw_str = f" (BL/SW: {bl_sw})" if bl_sw else ""
 			if is_new_pi:
@@ -825,6 +875,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				expense_fields=EXPENSE_FIELDS,
 				auto_submit_jv=auto_submit_jv,
 				existing_jv_map=existing_jv_map,
+				import_file_name=(import_file_doc.name if import_file_doc else None),
 			)
 
 			if jv_doc:
@@ -882,6 +933,8 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	return {
 		"created_pi": created_pi,
 		"updated_pi": updated_pi,
+		"created_import_files": created_if,
+		"updated_import_files": updated_if,
 		"created_jv": created_jv,
 		"updated_jv": updated_jv,
 		"created_lcv": created_lcv,
@@ -995,7 +1048,7 @@ def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map
 # JOURNAL ENTRY HELPER FOR EXPENSES
 # ==========================================
 
-def create_or_update_expense_journal_entry(pi_doc, inv_no, inv_date, bl_sw, conts, expense_fields, auto_submit_jv=False, existing_jv_map=None):
+def create_or_update_expense_journal_entry(pi_doc, inv_no, inv_date, bl_sw, conts, expense_fields, auto_submit_jv=False, existing_jv_map=None, import_file_name=None):
 	if not conts or not pi_doc:
 		return None, False
 
@@ -1016,6 +1069,8 @@ def create_or_update_expense_journal_entry(pi_doc, inv_no, inv_date, bl_sw, cont
 	if existing_jv_name:
 		jv_doc = frappe.get_doc("Journal Entry", existing_jv_name)
 		if jv_doc.docstatus != 0:
+			if import_file_name:
+				update_doc_import_file_link("Journal Entry", jv_doc.name, import_file_name)
 			return jv_doc, False
 		is_new = False
 	else:
@@ -1028,6 +1083,9 @@ def create_or_update_expense_journal_entry(pi_doc, inv_no, inv_date, bl_sw, cont
 	jv_doc.posting_date = jv_date
 	jv_doc.cheque_no = str(inv_no)
 	jv_doc.cheque_date = jv_date
+
+	if import_file_name:
+		link_import_file_to_doc(jv_doc, import_file_name)
 
 	cont_list = list(set([str(c.get("container_no", "")).strip() for c in conts if c.get("container_no")]))
 	cont_str = ", ".join(c for c in cont_list if c) if cont_list else "None"
@@ -1085,6 +1143,9 @@ def create_or_update_expense_journal_entry(pi_doc, inv_no, inv_date, bl_sw, cont
 		if auto_submit_jv and jv_doc.docstatus == 0:
 			jv_doc.flags.ignore_mandatory = True
 			jv_doc.submit()
+
+		if import_file_name:
+			update_doc_import_file_link("Journal Entry", jv_doc.name, import_file_name)
 
 		return jv_doc, is_new
 
@@ -1242,6 +1303,120 @@ def get_company_expense_account(company):
 	if not account:
 		account = frappe.db.get_value("Account", {"company": company, "root_type": "Expense", "is_group": 0}, "name")
 	return account
+
+
+def ensure_import_file_doctype():
+	if frappe.db.exists("DocType", "Import File"):
+		return
+	try:
+		app_path = frappe.get_app_path("vsd_jan_integration", "vsd_jan_international_customization", "doctype", "import_file", "import_file.json")
+		if os.path.exists(app_path):
+			frappe.reload_doc("vsd_jan_international_customization", "doctype", "import_file")
+	except Exception:
+		pass
+
+
+def compute_import_file_number(inv_no, bl_sw, format_option="Invoice No"):
+	inv_no = str(inv_no).strip() if inv_no else ""
+	bl_sw = str(bl_sw).strip() if bl_sw else ""
+
+	fmt = str(format_option or "").strip().lower()
+	if fmt == "bl number":
+		return bl_sw if bl_sw else inv_no
+	elif fmt in ("invoice no - bl number", "invoiceno - blnumber"):
+		return f"{inv_no} - {bl_sw}" if bl_sw else inv_no
+	else:
+		# Default: "Invoice No"
+		return inv_no
+
+
+def link_import_file_to_doc(doc, import_file_name):
+	if not doc or not import_file_name:
+		return
+	for fn in ("custom_import_file", "import_file"):
+		try:
+			has_attr = hasattr(doc, fn)
+			has_meta = bool(doc.meta and doc.meta.has_field(fn))
+			if has_attr or has_meta:
+				doc.set(fn, import_file_name)
+		except Exception:
+			pass
+
+
+def update_doc_import_file_link(doctype, docname, import_file_name):
+	if not doctype or not docname or not import_file_name:
+		return
+	for fn in ("custom_import_file", "import_file"):
+		try:
+			if frappe.db.has_column(doctype, fn):
+				frappe.db.set_value(doctype, docname, fn, import_file_name, update_modified=False)
+		except Exception:
+			pass
+
+
+def create_or_update_import_file(
+	inv_no,
+	bl_sw,
+	supplier_name,
+	currency,
+	invoice_amount,
+	conts=None,
+	format_option="Invoice No",
+	existing_import_file_map=None,
+):
+	if not inv_no:
+		return None, False
+
+	ensure_import_file_doctype()
+
+	import_file_number = compute_import_file_number(inv_no, bl_sw, format_option)
+
+	existing_name = None
+	if existing_import_file_map is not None:
+		existing_name = existing_import_file_map.get(str(import_file_number).strip())
+
+	if not existing_name:
+		existing_name = (
+			frappe.db.get_value("Import File", {"import_file_number": import_file_number}, "name")
+			or (import_file_number if frappe.db.exists("Import File", import_file_number) else None)
+		)
+
+	is_new = False
+	if existing_name:
+		doc = frappe.get_doc("Import File", existing_name)
+	else:
+		doc = frappe.new_doc("Import File")
+		doc.import_file_number = import_file_number
+		is_new = True
+
+	doc.bl_number = bl_sw or ""
+	doc.supplier_name = supplier_name or "JAN JAPAN"
+	doc.supplier_invoice_no = str(inv_no)
+	doc.invoice_currency = currency or "JPY"
+	doc.invoice_amount = frappe.utils.flt(invoice_amount)
+
+	if conts:
+		distinct_conts = [
+			c.get("container_no")
+			for c in conts
+			if c.get("container_no")
+			and not c.get("is_roro")
+			and str(c.get("container_no", "")).lower() not in ("inv other charges", "inv. other charges", "other charges", "unassigned")
+		]
+		container_count = len(set(distinct_conts))
+		doc.no_of_containers = str(container_count) if container_count > 0 else ""
+	else:
+		doc.no_of_containers = ""
+
+	doc.flags.ignore_mandatory = True
+	doc.flags.ignore_links = True
+	doc.save(ignore_permissions=True)
+
+	if existing_import_file_map is not None:
+		existing_import_file_map[str(import_file_number).strip()] = doc.name
+		existing_import_file_map[str(doc.name).strip()] = doc.name
+
+	return doc, is_new
 
 
 BL_SEARCH_KEYS = ["BL/SW", "BL / SW", "BL_SW", "BL", "B/L", "B/L NO", "B/L NO.", "BL NO", "BL NO.", "BILL OF LADING"]

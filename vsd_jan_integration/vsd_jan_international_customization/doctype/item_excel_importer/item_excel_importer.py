@@ -119,6 +119,19 @@ def run_import_job(docname, retry_failed_only=False):
 		if tot_cars > 0 and not importer.get("total_cars"):
 			importer.db_set("total_cars", tot_cars)
 
+		time_elapsed_str = res.get("time_elapsed_str", "")
+		importer.db_set("import_status", status)
+		importer.db_set("import_log", summary)
+		importer.db_set("failed_records", failed_records_json)
+		importer.db_set("processed_invoices", tot_inv)
+		importer.db_set("processed_cars", tot_cars)
+		if time_elapsed_str:
+			importer.db_set("estimated_time", time_elapsed_str)
+		if tot_inv > 0 and not importer.get("total_invoices"):
+			importer.db_set("total_invoices", tot_inv)
+		if tot_cars > 0 and not importer.get("total_cars"):
+			importer.db_set("total_cars", tot_cars)
+
 		publish_import_progress(
 			docname,
 			processed_invoices=tot_inv,
@@ -126,8 +139,10 @@ def run_import_job(docname, retry_failed_only=False):
 			processed_cars=tot_cars,
 			total_cars=importer.get("total_cars") or tot_cars,
 			active_step_text=f"Import finished with status: {status}",
-			time_elapsed_str=res.get("time_elapsed_str", ""),
+			time_elapsed_str=time_elapsed_str,
 			status=status,
+			estimated_time=time_elapsed_str,
+			update_db=True,
 		)
 
 	except Exception as exc:
@@ -142,16 +157,17 @@ def run_import_job(docname, retry_failed_only=False):
 			total_cars=0,
 			active_step_text=f"Import Failed: {str(exc)}",
 			status="Failed",
+			update_db=True,
 		)
 
 
-def publish_import_progress(docname, processed_invoices=0, total_invoices=0, processed_cars=0, total_cars=0, active_step_text="", time_elapsed_str="", status="In Progress", estimated_time=None):
+def publish_import_progress(docname, processed_invoices=0, total_invoices=0, processed_cars=0, total_cars=0, active_step_text="", time_elapsed_str="", status="In Progress", estimated_time=None, update_db=True):
 	percent = 0
 	tot = (total_invoices or 0) + (total_cars or 0)
 	if tot > 0:
 		percent = min(100, int(((processed_invoices or 0) + (processed_cars or 0)) / tot * 100))
 
-	if docname:
+	if docname and update_db:
 		try:
 			db_updates = {}
 			if processed_invoices is not None:
@@ -163,10 +179,12 @@ def publish_import_progress(docname, processed_invoices=0, total_invoices=0, pro
 			if total_cars is not None and total_cars > 0:
 				db_updates["total_cars"] = total_cars
 
-			if estimated_time:
+			if status in ["Completed", "Completed with Errors", "Failed"] and time_elapsed_str:
+				db_updates["estimated_time"] = time_elapsed_str
+			elif estimated_time:
 				db_updates["estimated_time"] = estimated_time
 			elif total_invoices or total_cars:
-				est = round((total_invoices or 0) * 0.15 + (total_cars or 0) * 0.03, 1)
+				est = round((total_invoices or 0) * 0.18 + (total_cars or 0) * 0.003, 1)
 				if est > 0:
 					db_updates["estimated_time"] = f"{est}s"
 
@@ -1253,11 +1271,11 @@ def parse_mkt_statement_excel(file_path):
 				current_section = "RORO_FULL_INVOICE_VALUE"
 				current_headers = None
 				continue
-			elif "RORO CARS" in line_text or ("RORO" in line_text and "CARS" in line_text and "INVOICE" not in line_text):
+			elif ("RORO CARS" in line_text or ("RORO" in line_text and "CARS" in line_text)) and "VALUE" not in line_text and "INVOICE" not in line_text:
 				current_section = "RORO_CARS"
 				current_headers = None
 				continue
-			elif "INVOICE CARS" in line_text and "NOT INVOICED" not in line_text and "RORO" not in line_text and "CONTAINER" not in line_text:
+			elif "INVOICE CARS" in line_text and "NOT INVOICED" not in line_text and "RORO" not in line_text and "CONTAINER" not in line_text and "VALUE" not in line_text:
 				current_section = "INVOICE_CARS"
 				current_headers = None
 				continue
@@ -1265,6 +1283,7 @@ def parse_mkt_statement_excel(file_path):
 				current_section = "FULL_INVOICE_VALUE"
 				current_headers = None
 				continue
+
 			elif "ANNEXURE TO MARKET" in line_text or any(kw in line_text for kw in [
 				"CONTAINER PRICE", "RORO CHARGES", "CONTAINERS OTHER",
 				"NOT INVOICED", "STOCK IN JAPAN", "TT RECEIPT ON THE WAY",

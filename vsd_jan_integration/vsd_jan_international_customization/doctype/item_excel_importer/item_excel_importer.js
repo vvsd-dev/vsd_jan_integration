@@ -84,7 +84,9 @@ frappe.ui.form.on('Item Excel Importer', {
 					frm.doc.total_invoices = data.total_invoices || 0;
 					frm.doc.processed_cars = data.processed_cars || 0;
 					frm.doc.total_cars = data.total_cars || 0;
-					frm.doc.estimated_time = data.time_elapsed_str || '';
+					if (data.estimated_time) {
+						frm.doc.estimated_time = data.estimated_time;
+					}
 					frm.active_step_text = data.active_step_text || '';
 					frm.progress_percent = data.percent || 0;
 					frm.trigger('render_progress_html');

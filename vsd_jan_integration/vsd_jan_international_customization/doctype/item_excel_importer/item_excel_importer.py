@@ -164,11 +164,120 @@ def run_import_job(docname, retry_failed_only=False):
 		)
 
 
-def publish_import_progress(docname, processed_invoices=0, total_invoices=0, processed_cars=0, total_cars=0, active_step_text="", time_elapsed_str="", status="In Progress", estimated_time=None, update_db=True):
-	percent = 0
-	tot = (total_invoices or 0) + (total_cars or 0)
-	if tot > 0:
-		percent = min(100, int(((processed_invoices or 0) + (processed_cars or 0)) / tot * 100))
+def format_duration(seconds):
+	if seconds is None:
+		return "0s"
+	try:
+		secs = float(seconds)
+	except (ValueError, TypeError):
+		return str(seconds)
+
+	if secs < 0:
+		secs = 0.0
+
+	if secs < 60:
+		return f"{round(secs, 1)}s"
+	mins = int(secs // 60)
+	rem = round(secs % 60, 1)
+	if rem == int(rem):
+		rem = int(rem)
+	return f"{mins}m {rem}s"
+
+
+def calculate_estimated_seconds(
+	total_invoices=0,
+	total_cars=0,
+	processed_invoices=0,
+	processed_cars=0,
+	elapsed_secs=0.0,
+	import_type="MKT Statement",
+	auto_submit_pi=False,
+	auto_submit_jv=False,
+	create_lcv=False,
+):
+	if import_type == "Mukechi":
+		inv_w = 0.0
+		car_w = 0.035
+	else:
+		inv_w = 1.05 + (0.15 if auto_submit_pi else 0.0) + (0.10 if auto_submit_jv else 0.0) + (0.25 if create_lcv else 0.0)
+		car_w = 0.018
+
+	total_units = (total_invoices or 0) * inv_w + (total_cars or 0) * car_w
+	done_units = (processed_invoices or 0) * inv_w + (processed_cars or 0) * car_w
+
+	if total_units <= 0:
+		return max(1.0, round(elapsed_secs, 1)), 0.0
+
+	# If we have measurable progress and elapsed time, compute empirical rate blended with model
+	if done_units > 0 and elapsed_secs > 0.5:
+		empirical_rate = elapsed_secs / done_units
+		progress_ratio = min(1.0, done_units / total_units)
+		blended_rate = (1.0 - progress_ratio) * 1.0 + progress_ratio * empirical_rate
+		rem_units = max(0.0, total_units - done_units)
+		rem_secs = max(0.0, round(blended_rate * rem_units, 1))
+		est_total_secs = round(elapsed_secs + rem_secs, 1)
+		return est_total_secs, rem_secs
+	else:
+		est_total_secs = max(1.0, round(total_units, 1))
+		return est_total_secs, est_total_secs
+
+
+def publish_import_progress(
+	docname,
+	processed_invoices=0,
+	total_invoices=0,
+	processed_cars=0,
+	total_cars=0,
+	active_step_text="",
+	time_elapsed_str="",
+	status="In Progress",
+	estimated_time=None,
+	update_db=True,
+	start_time=None,
+	import_type="MKT Statement",
+	auto_submit_pi=False,
+	auto_submit_jv=False,
+	create_lcv=False,
+):
+	if start_time:
+		elapsed_secs = max(0.0, round(time.time() - start_time, 2))
+	elif time_elapsed_str:
+		try:
+			clean_str = str(time_elapsed_str).replace("s", "").strip()
+			elapsed_secs = max(0.0, float(clean_str))
+		except Exception:
+			elapsed_secs = 0.0
+	else:
+		elapsed_secs = 0.0
+
+	est_total_secs, rem_secs = calculate_estimated_seconds(
+		total_invoices=total_invoices,
+		total_cars=total_cars,
+		processed_invoices=processed_invoices,
+		processed_cars=processed_cars,
+		elapsed_secs=elapsed_secs,
+		import_type=import_type,
+		auto_submit_pi=auto_submit_pi,
+		auto_submit_jv=auto_submit_jv,
+		create_lcv=create_lcv,
+	)
+
+	is_done = status in ["Completed", "Completed with Errors", "Failed"]
+	if is_done:
+		percent = 100 if status == "Completed" else min(100, int(((processed_invoices or 0) + (processed_cars or 0)) / max(1, (total_invoices or 0) + (total_cars or 0)) * 100))
+		formatted_elapsed = format_duration(elapsed_secs) if elapsed_secs > 0 else (time_elapsed_str or "0s")
+		formatted_est = formatted_elapsed
+		formatted_rem = "0s"
+	else:
+		# Weighted progress percent calculation
+		inv_w = 1.05 + (0.15 if auto_submit_pi else 0.0) + (0.10 if auto_submit_jv else 0.0) + (0.25 if create_lcv else 0.0) if import_type != "Mukechi" else 0.0
+		car_w = 0.018 if import_type != "Mukechi" else 0.035
+		total_w = (total_invoices or 0) * inv_w + (total_cars or 0) * car_w
+		done_w = (processed_invoices or 0) * inv_w + (processed_cars or 0) * car_w
+		percent = min(99, int((done_w / max(0.001, total_w)) * 100)) if total_w > 0 else 0
+		formatted_elapsed = format_duration(elapsed_secs)
+		formatted_est = format_duration(est_total_secs)
+		formatted_rem = format_duration(rem_secs)
 
 	if docname and update_db:
 		try:
@@ -182,20 +291,17 @@ def publish_import_progress(docname, processed_invoices=0, total_invoices=0, pro
 			if total_cars is not None and total_cars > 0:
 				db_updates["total_cars"] = total_cars
 
-			if status in ["Completed", "Completed with Errors", "Failed"] and time_elapsed_str:
-				db_updates["estimated_time"] = time_elapsed_str
+			if is_done:
+				db_updates["estimated_time"] = formatted_elapsed
 			elif estimated_time:
 				db_updates["estimated_time"] = estimated_time
-			elif total_invoices or total_cars:
-				est = round((total_invoices or 0) * 0.18 + (total_cars or 0) * 0.003, 1)
-				if est > 0:
-					db_updates["estimated_time"] = f"{est}s"
+			elif formatted_est:
+				db_updates["estimated_time"] = formatted_est
 
 			if db_updates:
 				frappe.db.set_value("Item Excel Importer", docname, db_updates, update_modified=False)
 		except Exception:
 			pass
-
 
 	message = {
 		"docname": docname,
@@ -205,8 +311,12 @@ def publish_import_progress(docname, processed_invoices=0, total_invoices=0, pro
 		"processed_cars": processed_cars or 0,
 		"total_cars": total_cars or 0,
 		"active_step_text": active_step_text,
-		"time_elapsed_str": time_elapsed_str,
+		"elapsed_secs": elapsed_secs,
+		"time_elapsed_str": formatted_elapsed,
+		"estimated_time_str": formatted_est,
+		"remaining_time_str": formatted_rem,
 		"status": status,
+		"timestamp": time.time(),
 	}
 
 	try:
@@ -275,23 +385,24 @@ def process_mukechi_import(file_path, docname=None):
 			log_lines.append(f"Row {idx} Error: {str(e)}")
 
 		if docname and idx % 10 == 0:
-			elapsed = round(time.time() - start_time, 2)
 			publish_import_progress(
 				docname,
 				processed_cars=idx,
 				total_cars=total_rows,
 				active_step_text=f"Processing Mukechi Row {idx} of {total_rows}...",
-				time_elapsed_str=f"{elapsed}s",
+				start_time=start_time,
+				import_type="Mukechi",
 			)
 
 	time_elapsed = round(time.time() - start_time, 2)
+	time_elapsed_str = format_duration(time_elapsed)
 	return {
 		"created": created_count,
 		"updated": updated_count,
 		"errors": error_count,
 		"log": log_lines,
 		"failed_records": failed_records,
-		"time_elapsed_str": f"{time_elapsed}s",
+		"time_elapsed_str": time_elapsed_str,
 	}
 
 
@@ -504,9 +615,15 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 			importer.db_set("processed_invoices", 0)
 			importer.db_set("total_cars", total_cars)
 			importer.db_set("processed_cars", 0)
-			est_secs = round(total_invoices * 0.18 + total_cars * 0.003, 1)
-			importer.db_set("estimated_time", f"{est_secs}s")
-
+			est_secs, _ = calculate_estimated_seconds(
+				total_invoices=total_invoices,
+				total_cars=total_cars,
+				import_type="MKT Statement",
+				auto_submit_pi=auto_submit_pi,
+				auto_submit_jv=auto_submit_jv,
+				create_lcv=create_lcv,
+			)
+			importer.db_set("estimated_time", format_duration(est_secs))
 		except Exception:
 			pass
 
@@ -521,6 +638,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 		total_invoices=total_invoices,
 		start_time=start_time,
 		import_file_number_format=import_file_number_format,
+		total_cars=total_cars,
 	)
 
 	car_res = run_car_updating_job(
@@ -530,13 +648,14 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 		invoice_containers_map=invoice_containers_map,
 		total_cars=total_cars,
 		start_time=start_time,
+		total_invoices=total_invoices,
 	)
 
 
 
 
 	time_elapsed = round(time.time() - start_time, 2)
-	time_elapsed_str = f"{time_elapsed}s"
+	time_elapsed_str = format_duration(time_elapsed)
 
 	created_pi = inv_res["created_pi"]
 	updated_pi = inv_res["updated_pi"]
@@ -604,7 +723,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 # SCHEDULER / WORKER 1: INVOICES & JOURNAL ENTRIES
 # ==========================================
 
-def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_lcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No"):
+def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_lcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No", total_cars=0):
 	supplier_name = ensure_supplier("JAN JAPAN")
 	created_pi_logs = []
 	not_created_pi_logs = []
@@ -716,14 +835,19 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			continue
 
 		try:
-			elapsed_str = f"{round(time.time() - start_time, 1)}s"
 			if docname:
 				publish_import_progress(
 					docname,
 					processed_invoices=processed_count,
 					total_invoices=total_invoices,
+					processed_cars=0,
+					total_cars=total_cars,
 					active_step_text=f"Creating/Updating Purchase Invoice '{inv_no}' ({processed_count}/{total_invoices})...",
-					time_elapsed_str=elapsed_str,
+					start_time=start_time,
+					import_type="MKT Statement",
+					auto_submit_pi=auto_submit_pi,
+					auto_submit_jv=auto_submit_jv,
+					create_lcv=create_lcv,
 				)
 
 			if existing_pi:
@@ -862,8 +986,14 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 					docname,
 					processed_invoices=processed_count,
 					total_invoices=total_invoices,
+					processed_cars=0,
+					total_cars=total_cars,
 					active_step_text=f"Creating Journal Entry for Supplier Invoice '{inv_no}'...",
-					time_elapsed_str=elapsed_str,
+					start_time=start_time,
+					import_type="MKT Statement",
+					auto_submit_pi=auto_submit_pi,
+					auto_submit_jv=auto_submit_jv,
+					create_lcv=create_lcv,
 				)
 
 			jv_doc, is_new_jv = create_or_update_expense_journal_entry(
@@ -955,7 +1085,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 # SCHEDULER / WORKER 2: CARS & ITEMS UPDATER
 # ==========================================
 
-def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map, total_cars, start_time):
+def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map, total_cars, start_time, total_invoices=0):
 	updated_items = 0
 	error_count = 0
 	logs = []
@@ -1003,13 +1133,15 @@ def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map
 
 		try:
 			if docname and processed_count % 10 == 0:
-				elapsed_str = f"{round(time.time() - start_time, 1)}s"
 				publish_import_progress(
 					docname,
+					processed_invoices=total_invoices,
+					total_invoices=total_invoices,
 					processed_cars=processed_count,
 					total_cars=total_cars,
 					active_step_text=f"Updating Car Item '{chassis_no}' ({processed_count}/{total_cars})...",
-					time_elapsed_str=elapsed_str,
+					start_time=start_time,
+					import_type="MKT Statement",
 				)
 
 			item_updates = {"custom_price": car_price, "standard_rate": car_price}

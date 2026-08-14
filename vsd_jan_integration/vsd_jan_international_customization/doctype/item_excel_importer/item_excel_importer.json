@@ -121,6 +121,7 @@
   {
    "fieldname": "estimated_time",
    "fieldtype": "Data",
+   "hidden": 1,
    "label": "Estimated Time",
    "read_only": 1
   },
@@ -163,7 +164,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-12 12:25:25.903911",
+ "modified": "2026-08-14 12:58:48.309644",
  "modified_by": "Administrator",
  "module": "VSD Jan International Customization",
  "name": "Item Excel Importer",

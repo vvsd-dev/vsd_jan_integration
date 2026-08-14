@@ -21,21 +21,31 @@ frappe.ui.form.on('Item Excel Importer', {
 					frappe.confirm(
 						__('Are you sure you want to process and import items from this Excel file in the background?'),
 						function() {
+							// Immediately update UI to Queued state so user sees instant progress bar without reloading
+							frm.doc.import_status = 'Queued';
+							frm.doc.processed_invoices = 0;
+							frm.doc.processed_cars = 0;
+							frm.active_step_text = __('Import job queued in background, starting...');
+							frm.progress_percent = 0;
+							frm._import_elapsed_secs = 0;
+							frm._import_start_epoch = Date.now();
+							frm.trigger('setup_realtime_listener');
+							frm.trigger('render_progress_html');
+							frm.trigger('start_live_timer');
+
 							frappe.call({
 								method: 'vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.enqueue_import',
 								args: {
 									docname: frm.doc.name,
 									retry_failed_only: false
 								},
-								freeze: true,
-								freeze_message: __('Queueing import job in background...'),
+								freeze: false,
 								callback: function(r) {
 									if (!r.exc && r.message) {
 										frappe.show_alert({
 											message: __('Import job queued successfully.'),
 											indicator: 'blue'
 										});
-										frm.reload_doc();
 									}
 								}
 							});
@@ -59,21 +69,29 @@ frappe.ui.form.on('Item Excel Importer', {
 					frappe.confirm(
 						__('Are you sure you want to retry importing only the failed records?'),
 						function() {
+							// Immediately update UI to Queued state
+							frm.doc.import_status = 'Queued';
+							frm.active_step_text = __('Retry job queued in background, starting...');
+							frm.progress_percent = 0;
+							frm._import_elapsed_secs = 0;
+							frm._import_start_epoch = Date.now();
+							frm.trigger('setup_realtime_listener');
+							frm.trigger('render_progress_html');
+							frm.trigger('start_live_timer');
+
 							frappe.call({
 								method: 'vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.enqueue_import',
 								args: {
 									docname: frm.doc.name,
 									retry_failed_only: true
 								},
-								freeze: true,
-								freeze_message: __('Queueing retry job...'),
+								freeze: false,
 								callback: function(r) {
 									if (!r.exc && r.message) {
 										frappe.show_alert({
 											message: __('Retry job queued successfully.'),
 											indicator: 'blue'
 										});
-										frm.reload_doc();
 									}
 								}
 							});
@@ -85,41 +103,48 @@ frappe.ui.form.on('Item Excel Importer', {
 	},
 
 	setup_realtime_listener: function(frm) {
-		if (frm.doc.name && (frm.doc.import_status === 'In Progress' || frm.doc.import_status === 'Queued')) {
-			frappe.realtime.off('item_excel_import_progress_' + frm.doc.name);
-			frappe.realtime.on('item_excel_import_progress_' + frm.doc.name, function(data) {
-				if (data) {
-					frm.doc.processed_invoices = data.processed_invoices || 0;
-					frm.doc.total_invoices = data.total_invoices || 0;
-					frm.doc.processed_cars = data.processed_cars || 0;
-					frm.doc.total_cars = data.total_cars || 0;
-					if (data.estimated_time_str) {
-						frm.doc.estimated_time = data.estimated_time_str;
-						frm._estimated_time_str = data.estimated_time_str;
-					} else if (data.estimated_time) {
-						frm.doc.estimated_time = data.estimated_time;
-					}
-					if (data.remaining_time_str) {
-						frm._remaining_time_str = data.remaining_time_str;
-					}
-					if (data.elapsed_secs !== undefined && data.elapsed_secs !== null) {
-						frm._import_elapsed_secs = data.elapsed_secs;
-						frm._import_start_epoch = Date.now() - (data.elapsed_secs * 1000);
-					}
-					frm.active_step_text = data.active_step_text || '';
-					frm.progress_percent = data.percent || 0;
-					frm.trigger('render_progress_html');
+		if (!frm.doc.name || frm.is_new()) return;
 
-					if (data.status && data.status !== 'In Progress' && data.status !== 'Queued') {
-						if (frm._timer_interval) {
-							clearInterval(frm._timer_interval);
-							frm._timer_interval = null;
-						}
-						frm.doc.import_status = data.status;
-						frm.reload_doc();
-					}
+		var event_name = 'item_excel_import_progress_' + frm.doc.name;
+		frappe.realtime.off(event_name);
+		frappe.realtime.on(event_name, function(data) {
+			if (data) {
+				if (data.status) {
+					frm.doc.import_status = data.status;
 				}
-			});
+				frm.doc.processed_invoices = data.processed_invoices || 0;
+				frm.doc.total_invoices = data.total_invoices || 0;
+				frm.doc.processed_cars = data.processed_cars || 0;
+				frm.doc.total_cars = data.total_cars || 0;
+				if (data.estimated_time_str) {
+					frm.doc.estimated_time = data.estimated_time_str;
+					frm._estimated_time_str = data.estimated_time_str;
+				} else if (data.estimated_time) {
+					frm.doc.estimated_time = data.estimated_time;
+				}
+				if (data.remaining_time_str) {
+					frm._remaining_time_str = data.remaining_time_str;
+				}
+				if (data.elapsed_secs !== undefined && data.elapsed_secs !== null) {
+					frm._import_elapsed_secs = data.elapsed_secs;
+					frm._import_start_epoch = Date.now() - (data.elapsed_secs * 1000);
+				}
+				frm.active_step_text = data.active_step_text || '';
+				frm.progress_percent = data.percent !== undefined ? data.percent : (frm.progress_percent || 0);
+				frm.trigger('render_progress_html');
+
+				if (data.status && data.status !== 'In Progress' && data.status !== 'Queued') {
+					if (frm._timer_interval) {
+						clearInterval(frm._timer_interval);
+						frm._timer_interval = null;
+					}
+					frm.doc.import_status = data.status;
+					frm.reload_doc();
+				}
+			}
+		});
+
+		if (frm.doc.import_status === 'In Progress' || frm.doc.import_status === 'Queued') {
 			frm.trigger('start_live_timer');
 		}
 	},

@@ -46,6 +46,18 @@ def enqueue_import(docname, retry_failed_only=False):
 	importer.db_set("import_status", "Queued")
 	importer.db_set("import_log", "Job queued in background...")
 
+	publish_import_progress(
+		docname,
+		processed_invoices=0,
+		total_invoices=importer.get("total_invoices") or 0,
+		processed_cars=0,
+		total_cars=importer.get("total_cars") or 0,
+		active_step_text=_("Import job queued in background..."),
+		status="Queued",
+		start_time=time.time(),
+		update_db=True,
+	)
+
 	frappe.enqueue(
 		"vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.run_import_job",
 		docname=docname,
@@ -784,9 +796,10 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	except Exception:
 		pass
 
-	has_pi_custom_bl_sw = frappe.db.has_column("Purchase Invoice", "custom_bl_sw")
-	has_pi_custom_container_breakdown = frappe.db.has_column("Purchase Invoice", "custom_container_breakdown")
-	has_pi_custom_import_file = frappe.db.has_column("Purchase Invoice", "custom_import_file") or frappe.db.has_column("Purchase Invoice", "import_file")
+	pi_meta = frappe.get_meta("Purchase Invoice")
+	has_pi_custom_bl_sw = pi_meta.has_field("custom_bl_sw")
+	has_pi_custom_container_breakdown = pi_meta.has_field("custom_container_breakdown")
+	has_pi_import_file = pi_meta.has_field("import_file") or pi_meta.has_field("custom_import_file")
 
 	processed_count = 0
 
@@ -970,7 +983,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 					pi_doc.flags.ignore_mandatory = True
 					pi_doc.submit()
 
-			if import_file_doc and has_pi_custom_import_file:
+			if import_file_doc and has_pi_import_file:
 				update_doc_import_file_link("Purchase Invoice", pi_doc.name, import_file_doc.name)
 
 			bl_sw_str = f" (BL/SW: {bl_sw})" if bl_sw else ""

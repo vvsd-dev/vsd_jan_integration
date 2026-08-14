@@ -164,8 +164,19 @@ frappe.ui.form.on('Item Excel Importer', {
 			return;
 		}
 
-		var percent = frm.progress_percent || 0;
-		if (status === 'Completed') percent = 100;
+		var percent = frm.progress_percent;
+		if (percent === undefined || percent === null || isNaN(percent)) {
+			if (status === 'Completed' || status === 'Completed with Errors') {
+				percent = 100;
+			} else {
+				var tot = (frm.doc.total_invoices || 0) + (frm.doc.total_cars || 0);
+				var proc = (frm.doc.processed_invoices || 0) + (frm.doc.processed_cars || 0);
+				percent = tot > 0 ? Math.min(100, Math.round((proc / tot) * 100)) : 0;
+			}
+		}
+		if (status === 'Completed' || status === 'Completed with Errors') {
+			percent = 100;
+		}
 
 		var step_text = frm.active_step_text || (status === 'Completed' ? 'Import completed successfully.' : (status === 'Completed with Errors' ? 'Import completed with errors.' : 'Processing import...'));
 		var indicator = 'info';

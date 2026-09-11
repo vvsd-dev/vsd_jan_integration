@@ -15,6 +15,8 @@
     "Label": "Chassis No",
     "Fieldname": "custom_chassis_no",
     "Insert After": "custom_vehicle_details_section",
+    "In List View": 1,
+    "In Standard Filter": 1,
     "Module (for export)": "VSD Jan International Customization"
   },
   {
@@ -120,7 +122,7 @@
     "ID": "Item-custom_price",
     "DocType": "Item",
     "Field Type": "Currency",
-    "Label": "Price",
+    "Label": "Purchase Price",
     "Fieldname": "custom_price",
     "Insert After": "custom_col_break_2",
     "Module (for export)": "VSD Jan International Customization"

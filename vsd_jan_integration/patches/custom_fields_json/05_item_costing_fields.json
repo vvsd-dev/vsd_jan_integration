@@ -1,0 +1,123 @@
+[
+  {
+    "DocType": "Item",
+    "Field Type": "Tab Break",
+    "Label": "Costing",
+    "Fieldname": "custom_costing_tab",
+    "Insert After": "custom_highest_bids_remarks",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Section Break",
+    "Label": "Cost Summary",
+    "Fieldname": "custom_costing_summary_section",
+    "Insert After": "custom_costing_tab",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Float",
+    "Label": "Exchange Rate (TZS/USD)",
+    "Fieldname": "custom_exchange_rate",
+    "Insert After": "custom_costing_summary_section",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Currency",
+    "Label": "Total Expected Expense",
+    "Fieldname": "custom_total_expected_expense",
+    "Insert After": "custom_exchange_rate",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Currency",
+    "Label": "Total Actual Expense",
+    "Fieldname": "custom_total_actual_expense",
+    "Insert After": "custom_total_expected_expense",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Column Break",
+    "Fieldname": "custom_costing_col_2",
+    "Insert After": "custom_total_actual_expense",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Currency",
+    "Label": "Cost (TSH)",
+    "Fieldname": "custom_cost",
+    "Insert After": "custom_costing_col_2",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Currency",
+    "Label": "Selling Price (TSH)",
+    "Fieldname": "custom_selling_price",
+    "Insert After": "custom_cost",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Currency",
+    "Label": "Profit (USD)",
+    "Fieldname": "custom_profit_usd",
+    "Insert After": "custom_selling_price",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Column Break",
+    "Fieldname": "custom_costing_col_3",
+    "Insert After": "custom_profit_usd",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Link",
+    "Label": "Last Car Costing",
+    "Fieldname": "custom_last_car_costing",
+    "Options": "Car Costing",
+    "Insert After": "custom_costing_col_3",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Section Break",
+    "Label": "Costing Lines",
+    "Fieldname": "custom_costing_lines_section",
+    "Insert After": "custom_last_car_costing",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Table",
+    "Label": "Tanzania Costing (Expected / Actual)",
+    "Fieldname": "custom_tz_costing",
+    "Options": "Item Costing Line",
+    "Insert After": "custom_costing_lines_section",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Item",
+    "Field Type": "Table",
+    "Label": "Japan Costing (Expected / Actual)",
+    "Fieldname": "custom_japan_costing",
+    "Options": "Item Costing Line",
+    "Insert After": "custom_tz_costing",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  }
+]

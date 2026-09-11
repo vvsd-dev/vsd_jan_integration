@@ -1,0 +1,98 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+  "field_order": [
+  "expense_account",
+  "description",
+  "currency",
+  "amount",
+  "source",
+  "column_break_1",
+  "costing_head",
+  "costing_code",
+  "distribution_method",
+  "linked_item",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "expense_account",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Expense Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Description"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Amount",
+   "options": "currency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "label": "Source",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "costing_head",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Costing",
+   "options": "Costing"
+  },
+  {
+   "fetch_from": "costing_head.costing_code",
+   "fieldname": "costing_code",
+   "fieldtype": "Data",
+   "label": "Code",
+   "read_only": 1
+  },
+  {
+   "default": "By BL Equal",
+   "fieldname": "distribution_method",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Distribution Method",
+   "options": "By BL Equal\nBy BL M3\nBy Vehicle Manual"
+  },
+  {
+   "fieldname": "linked_item",
+   "fieldtype": "Link",
+   "label": "Item",
+   "options": "Item",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "istable": 1,
+ "module": "VSD Jan International Customization",
+ "name": "Import File Cost Voucher Expense",
+ "permissions": []
+}

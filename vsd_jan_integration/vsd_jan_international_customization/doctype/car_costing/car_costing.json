@@ -1,0 +1,262 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-09-05 11:10:18.847192",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "item",
+  "import_file",
+  "costing_date",
+  "exchange_rate",
+  "yen_exchange_rate",
+  "column_break_1",
+  "chassis_no",
+  "maker",
+  "model",
+  "m3",
+  "yen",
+  "section_break_tz",
+  "tz_costing_lines",
+  "section_break_japan",
+  "japan_costing_lines",
+  "section_break_summary",
+  "usd_currency",
+  "total_exp_tsh",
+  "tsh_to_usd",
+  "total_exp_usd",
+  "column_break_summary",
+  "yen_in_usd",
+  "total_cost_usd",
+  "cost",
+  "price",
+  "days_since_purchase",
+  "readiness_html",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "default": "CC-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "CC-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "import_file",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Import File",
+   "options": "Import File"
+  },
+  {
+   "default": "Today",
+   "fieldname": "costing_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Costing Date"
+  },
+  {
+   "description": "TZS per 1 USD — from Currency Exchange (Buying) on Costing Date.",
+   "fieldname": "exchange_rate",
+   "fieldtype": "Float",
+   "label": "Exchange Rate (TZS/USD)",
+   "precision": "6",
+   "reqd": 1
+  },
+  {
+   "description": "JPY per 1 USD — from Currency Exchange (Buying) on Costing Date.",
+   "fieldname": "yen_exchange_rate",
+   "fieldtype": "Float",
+   "label": "YEN/USD Rate",
+   "precision": "6"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "item.custom_chassis_no",
+   "fieldname": "chassis_no",
+   "fieldtype": "Data",
+   "label": "Chassis No",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "item.custom_maker",
+   "fieldname": "maker",
+   "fieldtype": "Data",
+   "label": "Maker",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "item.custom_model",
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Model",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "item.custom_m3",
+   "fetch_if_empty": 1,
+   "fieldname": "m3",
+   "fieldtype": "Float",
+   "label": "M3"
+  },
+  {
+   "fieldname": "yen",
+   "fieldtype": "Currency",
+   "label": "YEN",
+   "options": "JPY",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_tz",
+   "fieldtype": "Section Break",
+   "label": "Tanzania Costs (Expected) \u2014 TZS"
+  },
+  {
+   "fieldname": "tz_costing_lines",
+   "fieldtype": "Table",
+   "label": "TZ Costing Lines",
+   "options": "Item Costing Line"
+  },
+  {
+   "fieldname": "section_break_japan",
+   "fieldtype": "Section Break",
+   "label": "Japan Costs (Expected) \u2014 USD"
+  },
+  {
+   "fieldname": "japan_costing_lines",
+   "fieldtype": "Table",
+   "label": "Japan Costing Lines",
+   "options": "Item Costing Line"
+  },
+  {
+   "fieldname": "section_break_summary",
+   "fieldtype": "Section Break",
+   "label": "Summary"
+  },
+  {
+   "default": "USD",
+   "fieldname": "usd_currency",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "USD Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_exp_tsh",
+   "fieldtype": "Currency",
+   "label": "TOTAL EXP TSH",
+   "options": "TZS",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tsh_to_usd",
+   "fieldtype": "Currency",
+   "label": "TSH TO USD",
+   "options": "usd_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_exp_usd",
+   "fieldtype": "Currency",
+   "label": "TOTAL EXP USD",
+   "options": "usd_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_summary",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "yen_in_usd",
+   "fieldtype": "Currency",
+   "label": "YEN IN USD",
+   "options": "usd_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_cost_usd",
+   "fieldtype": "Currency",
+   "label": "TOTAL COST USD",
+   "options": "usd_currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cost",
+   "fieldtype": "Currency",
+   "label": "COST (TSH)",
+   "options": "TZS",
+   "read_only": 1
+  },
+  {
+   "fieldname": "price",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "PRICE (TSH)",
+   "options": "TZS",
+   "read_only": 1
+  },
+  {
+   "fieldname": "days_since_purchase",
+   "fieldtype": "Int",
+   "label": "Days Since Purchase",
+   "read_only": 1
+  },
+  {
+   "fieldname": "readiness_html",
+   "fieldtype": "HTML",
+   "label": "Readiness"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Car Costing",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  }
+ ],
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-09-11 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "VSD Jan International Customization",
+ "name": "Car Costing",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -1,0 +1,20 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["item","chassis_no","costing_head","account","currency","amount","source_row"],
+ "fields": [
+  {"fieldname":"item","fieldtype":"Link","label":"Item","options":"Item","reqd":1,"in_list_view":1},
+  {"fieldname":"chassis_no","fieldtype":"Data","label":"Chassis No","read_only":1,"fetch_from":"item.custom_chassis_no","in_list_view":1},
+  {"fieldname":"costing_head","fieldtype":"Link","label":"Costing","options":"Costing","in_list_view":1},
+  {"fieldname":"account","fieldtype":"Link","label":"Account","options":"Account","in_list_view":1},
+  {"fieldname":"currency","fieldtype":"Link","label":"Currency","options":"Currency","read_only":1,"in_list_view":1},
+  {"fieldname":"amount","fieldtype":"Currency","label":"Amount","options":"currency","in_list_view":1},
+  {"fieldname":"source_row","fieldtype":"Int","label":"Expense Row #","read_only":1}
+ ],
+ "istable":1,
+ "module":"VSD Jan International Customization",
+ "name":"Import File Cost Voucher Allocation",
+ "permissions":[]
+}

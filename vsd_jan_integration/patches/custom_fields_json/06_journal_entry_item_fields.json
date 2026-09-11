@@ -1,0 +1,22 @@
+[
+  {
+    "DocType": "Journal Entry",
+    "Field Type": "Link",
+    "Label": "Item",
+    "Fieldname": "custom_item",
+    "Options": "Item",
+    "Insert After": "import_file",
+    "Field Description": "Vehicle Item for this JE. IFCV maps By Vehicle expenses using this first.",
+    "Module (for export)": "VSD Jan International Customization"
+  },
+  {
+    "DocType": "Journal Entry",
+    "Field Type": "Data",
+    "Label": "Chassis No",
+    "Fieldname": "custom_chassis_no",
+    "Insert After": "custom_item",
+    "Fetch From": "custom_item.custom_chassis_no",
+    "Read Only": 1,
+    "Module (for export)": "VSD Jan International Customization"
+  }
+]

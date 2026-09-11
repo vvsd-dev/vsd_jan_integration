@@ -43,7 +43,10 @@ app_license = "mit"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+	"Item": "public/js/item_costing.js",
+	"Journal Entry": "public/js/journal_entry.js",
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -147,13 +150,21 @@ fixtures = [
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Item": {
+		"after_insert": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.item_after_insert",
+		"on_update": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.item_on_update",
+	},
+	"Purchase Invoice": {
+		"after_insert": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.purchase_invoice_after_save",
+		"on_update": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.purchase_invoice_after_save",
+		"on_submit": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.purchase_invoice_after_save",
+	},
+	"Import File": {
+		"after_insert": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.import_file_after_save",
+		"on_update": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.import_file_after_save",
+	},
+}
 
 # Scheduled Tasks
 # ---------------
@@ -202,7 +213,7 @@ fixtures = [
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-# ignore_links_on_delete = ["Communication", "ToDo"]
+ignore_links_on_delete = ["Item"]
 
 # Request Events
 # ----------------

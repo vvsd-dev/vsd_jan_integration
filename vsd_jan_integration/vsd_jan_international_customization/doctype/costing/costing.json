@@ -1,0 +1,179 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:costing_code",
+ "creation": "2026-09-05 11:14:34.279078",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+  "field_order": [
+  "costing_code",
+  "costing_name",
+  "region",
+  "entry_mode",
+  "allocation_scope",
+  "disabled",
+  "column_break_1",
+  "account",
+  "payable_account",
+  "currency",
+  "default_projected_amount",
+  "display_order",
+  "section_break_formula",
+  "formula",
+  "depends_on"
+ ],
+ "fields": [
+  {
+   "fieldname": "costing_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Costing Code",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "bold": 1,
+   "fieldname": "costing_name",
+   "fieldtype": "Data",
+   "in_global_search": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Costing Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Region",
+   "options": "Tanzania\nJapan",
+   "reqd": 1
+  },
+  {
+   "description": "Fixed = auto default amount. Variable = user types amount for this car (estimate). Formula = system calculates from other lines (e.g. Duty \u00d7 7%).",
+   "fieldname": "entry_mode",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Entry Mode",
+   "options": "Fixed\nVariable\nFormula",
+   "reqd": 1
+  },
+  {
+   "default": "By Vehicle",
+   "description": "By Vehicle = map to specific cars (manual/per-car JE). By BL Equal = split bulk amount equally across cars. By BL M3 = split by each car's M3 share. IFCV uses this — do not hardcode on the voucher.",
+   "fieldname": "allocation_scope",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Allocation Scope",
+   "options": "By Vehicle\nBy BL Equal\nBy BL M3",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Expense / debit GL used when posting and mapping IFCV expenses.",
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "label": "Account",
+   "options": "Account"
+  },
+  {
+   "description": "Payable / credit GL for Fixed Costing Journal Entries created on MKT import.",
+   "fieldname": "payable_account",
+   "fieldtype": "Link",
+   "label": "Payable Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Currency",
+   "options": "Currency"
+  },
+  {
+   "fieldname": "default_projected_amount",
+   "fieldtype": "Currency",
+   "label": "Default Projected Amount",
+   "options": "currency"
+  },
+  {
+   "default": "0",
+   "description": "Deprecated — child tables sort by Costing Name.",
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "hidden": 1,
+   "label": "Display Order",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_formula",
+   "fieldtype": "Section Break",
+   "label": "Formula"
+  },
+  {
+   "depends_on": "eval:doc.entry_mode=='Formula'",
+   "description": "Tokens like {line.tra_duty}. Only used when Entry Mode is Formula.",
+   "fieldname": "formula",
+   "fieldtype": "Small Text",
+   "label": "Formula"
+  },
+  {
+   "depends_on": "eval:doc.entry_mode=='Formula'",
+   "description": "Comma-separated costing codes this formula depends on",
+   "fieldname": "depends_on",
+   "fieldtype": "Small Text",
+   "label": "Depends On"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-07 16:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "VSD Jan International Customization",
+ "name": "Costing",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "select": 1,
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "All",
+   "select": 1
+  }
+ ],
+ "quick_entry": 1,
+ "row_format": "Dynamic",
+ "search_fields": "costing_name,costing_code,region",
+ "show_name_in_global_search": 1,
+ "show_title_in_link": 1,
+ "sort_field": "costing_name",
+ "sort_order": "ASC",
+ "states": [],
+ "title_field": "costing_name",
+ "track_changes": 1
+}

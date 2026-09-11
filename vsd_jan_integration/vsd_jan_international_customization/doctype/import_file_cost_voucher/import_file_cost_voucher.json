@@ -1,0 +1,136 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "import_file",
+  "posting_date",
+  "column_break_1",
+  "auto_update_car_costing",
+  "distribution_basis",
+  "section_break_vehicles",
+  "vehicles",
+  "section_break_exp",
+  "expenses",
+  "section_break_alloc",
+  "allocations",
+  "total_expense_amount",
+  "total_allocated_amount"
+ ],
+ "fields": [
+  {
+   "default": "IFCV-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "IFCV-.YYYY.-.#####",
+   "reqd": 1
+  },
+  {
+   "fieldname": "import_file",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Import File",
+   "options": "Import File",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "label": "Posting Date"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Deprecated — Car Costing Expected is maintained separately; IFCV only writes Item Actuals.",
+   "fieldname": "auto_update_car_costing",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Also Update Car Costing Expected",
+   "read_only": 1
+  },
+  {
+   "default": "Equal",
+   "description": "Deprecated — Equal vs M3 is set per Costing (Allocation Scope). Kept for old documents only.",
+   "fieldname": "distribution_basis",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Default Distribution Basis",
+   "options": "Equal\nM3",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_vehicles",
+   "fieldtype": "Section Break",
+   "label": "Vehicles on this Import File"
+  },
+  {
+   "fieldname": "vehicles",
+   "fieldtype": "Table",
+   "label": "Vehicles",
+   "options": "Import File Cost Voucher Item"
+  },
+  {
+   "fieldname": "section_break_exp",
+   "fieldtype": "Section Break",
+   "label": "Posted Expenses (from JE / PI)"
+  },
+  {
+   "fieldname": "expenses",
+   "fieldtype": "Table",
+   "label": "Expenses",
+   "options": "Import File Cost Voucher Expense"
+  },
+  {
+   "fieldname": "section_break_alloc",
+   "fieldtype": "Section Break",
+   "label": "Mapped Vehicle Allocations"
+  },
+  {
+   "fieldname": "allocations",
+   "fieldtype": "Table",
+   "label": "Allocations",
+   "options": "Import File Cost Voucher Allocation"
+  },
+  {
+   "fieldname": "total_expense_amount",
+   "fieldtype": "Currency",
+   "label": "Total Expense Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_allocated_amount",
+   "fieldtype": "Currency",
+   "label": "Total Allocated Amount",
+   "read_only": 1
+  }
+ ],
+ "is_submittable": 1,
+ "module": "VSD Jan International Customization",
+ "name": "Import File Cost Voucher",
+ "naming_rule": "By \"Naming Series\" field",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

@@ -46,6 +46,7 @@
   },
   {
    "default": "Invoice No",
+   "depends_on": "eval:doc.import_type != 'Mukechi'",
    "fieldname": "import_file_number_format",
    "fieldtype": "Select",
    "in_list_view": 1,
@@ -54,6 +55,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval:doc.import_type != 'Mukechi'",
    "description": "When checked, created Purchase Invoices will be submitted automatically.",
    "fieldname": "auto_submit_purchase_invoice",
    "fieldtype": "Check",
@@ -62,6 +64,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval:doc.import_type != 'Mukechi'",
    "description": "When checked, created expense Journal Entries will be submitted automatically.",
    "fieldname": "auto_submit_journal_entry",
    "fieldtype": "Check",
@@ -92,6 +95,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval:doc.import_type != 'Mukechi'",
    "fieldname": "total_invoices",
    "fieldtype": "Int",
    "label": "Total Invoices",
@@ -99,6 +103,7 @@
   },
   {
    "default": "0",
+   "depends_on": "eval:doc.import_type != 'Mukechi'",
    "fieldname": "processed_invoices",
    "fieldtype": "Int",
    "label": "Processed Invoices",

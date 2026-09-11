@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Car Costing &amp; IFCV — Training Manual</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 18mm 14mm;
+    @bottom-center { content: "Jan International · Car Costing Training Manual · " counter(page);
+      font-size: 8.5pt; color: #64748b; } }
+  :root {
+    --ink:#0f172a; --muted:#475569; --line:#cbd5e1; --bg:#f1f5f9;
+    --green:#0f766e; --blue:#1d4ed8; --purple:#6d28d9; --rose:#be123c; --amber:#b45309;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; color: var(--ink);
+    font-size: 10pt; line-height: 1.42; margin: 0; }
+  h1 { font-size: 20pt; color: #0f3d68; margin: 0 0 6pt; }
+  h2 { font-size: 13pt; color: #0f3d68; margin: 18pt 0 8pt; padding-bottom: 3pt;
+    border-bottom: 2.5px solid var(--green); page-break-after: avoid; }
+  h3 { font-size: 11pt; margin: 12pt 0 5pt; color: #1e293b; page-break-after: avoid; }
+  h4 { font-size: 10pt; margin: 8pt 0 4pt; }
+  p { margin: 0 0 7pt; }
+  .cover { background: linear-gradient(135deg,#ecfdf5,#eff6ff); border:1px solid var(--line);
+    border-radius:8pt; padding:18pt; margin-bottom:12pt; }
+  .subtitle { color: var(--muted); font-size: 10.5pt; margin-bottom: 8pt; }
+  .meta { font-size: 9pt; color: var(--muted); }
+  .meta strong { color: var(--ink); }
+  .toc { background: var(--bg); border:1px solid var(--line); border-radius:6pt; padding:10pt 14pt; margin:10pt 0 14pt; }
+  .toc ol { margin: 4pt 0 0 14pt; padding:0; }
+  .toc li { margin: 2pt 0; }
+  .callout { border-left:4px solid var(--green); background:#f0fdfa; padding:7pt 10pt; margin:8pt 0; border-radius:0 5pt 5pt 0; }
+  .callout.blue { border-left-color: var(--blue); background:#eff6ff; }
+  .callout.warn { border-left-color: var(--amber); background:#fffbeb; }
+  .callout.rose { border-left-color: var(--rose); background:#fff1f2; }
+  table { width:100%; border-collapse:collapse; margin:6pt 0 10pt; font-size:9pt; }
+  th, td { border:1px solid var(--line); padding:4pt 6pt; vertical-align:top; text-align:left; }
+  th { background: var(--bg); font-weight:600; }
+  .badge { display:inline-block; padding:1pt 5pt; border-radius:999pt; font-size:8pt; font-weight:700; color:#fff; }
+  .b-fix { background:#64748b; } .b-var { background:#0f766e; } .b-form { background:#7c3aed; }
+  .b-bl { background:#4338ca; } .b-veh { background:#be123c; } .b-tz { background:#0e7490; } .b-jp { background:#c2410c; }
+  .card { border:1px solid var(--line); border-radius:6pt; padding:8pt 10pt; margin:6pt 0; page-break-inside:avoid; background:#fff; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8pt; margin:6pt 0 10pt; }
+  .step { counter-increment:step; position:relative; border:1px solid var(--line); border-radius:6pt;
+    padding:8pt 10pt 8pt 36pt; margin:6pt 0; page-break-inside:avoid; }
+  .step::before { content:counter(step); position:absolute; left:8pt; top:8pt; width:20pt; height:20pt;
+    border-radius:50%; background:var(--green); color:#fff; font-weight:700; font-size:10pt; text-align:center; line-height:20pt; }
+  .steps { counter-reset:step; }
+  .pagebreak { page-break-before: always; }
+  .btn { display:inline-block; background:#1e293b; color:#fff; padding:1pt 7pt; border-radius:3pt; font-size:8.5pt; font-weight:600; }
+  .btn.green { background:#0f766e; } .btn.blue { background:#1d4ed8; } .btn.grey { background:#64748b; }
+  code { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size:8.5pt; background:var(--bg); padding:0 2pt; border-radius:2pt; }
+  ul, ol { margin:3pt 0 8pt 16pt; padding:0; }
+  li { margin:2pt 0; }
+  .caption { font-size:8pt; color:var(--muted); font-style:italic; margin:-2pt 0 10pt; }
+  img.shot { width:100%; border:1px solid var(--line); border-radius:4pt; margin:4pt 0 6pt; }
+  .small { font-size:8.5pt; color:var(--muted); }
+  .field-name { font-weight:700; color:#0f3d68; }
+  svg.flow { width:100%; height:auto; margin:6pt 0 8pt; }
+</style>
+</head>
+<body>
+
+<!-- ================= COVER ================= -->
+<div class="cover">
+  <h1>Car Costing &amp; Import File Cost Voucher</h1>
+  <p class="subtitle"><strong>Training Manual</strong> — theory, workflow, and a button-by-button guide so anyone can understand and operate the system.</p>
+  <p class="meta">
+    <strong>Audience:</strong> Operations, Accounts, and Super Users &nbsp;·&nbsp;
+    <strong>App:</strong> vsd_jan_integration &nbsp;·&nbsp;
+    <strong>Site example:</strong> N.TAN039/26MSC (BL MEDUW3445865) &nbsp;·&nbsp;
+    <strong>Excel source:</strong> 1 BL COST.xlsx → sheet NEW COST FILE
+  </p>
+</div>
+
+<div class="callout">
+  <strong>How to use this manual:</strong> Sections 1–4 explain the <em>why</em> and the model.
+  Sections 5–7 are desk walkthroughs (every field and button).
+  Section 8 is a full story with numbers. Section 9 is FAQ / mistakes.
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li>The business problem (in plain language)</li>
+    <li>Core idea: Projected vs Actual</li>
+    <li>The three building blocks</li>
+    <li>Glossary</li>
+    <li>Costing — every field explained</li>
+    <li>Car Costing — every field &amp; button</li>
+    <li>Import File Cost Voucher — every field &amp; button</li>
+    <li>Worked example (N.TAN039/26MSC)</li>
+    <li>FAQ, rules, and common mistakes</li>
+    <li>Recommended daily workflow checklist</li>
+  </ol>
+</div>
+
+<!-- ================= 1 ================= -->
+<h2>1. The business problem (in plain language)</h2>
+<p>
+Jan International imports cars from Japan. Each car ends up with many cost pieces:
+purchase price in Yen, Japan-side charges (inspection, shipping, ICD…), and Tanzania-side charges (TRA duty, wharfage, TPA, clearing, service…).
+</p>
+<p>
+Those costs do <strong>not</strong> all arrive at the same time:
+</p>
+<ul>
+  <li>Early: you know chassis, purchase Yen, later M3, later TRA duty assessment.</li>
+  <li>Later: accounts posts real Journal Entries / Purchase Invoices against an <strong>Import File</strong> (supplier invoice no. like <code>N.TAN039/26MSC</code>).</li>
+  <li>Some invoices are for <strong>one car</strong>; some are for the <strong>whole Bill of Lading (BL)</strong> and must be shared.</li>
+</ul>
+<p>
+The costing module exists so the team can:
+</p>
+<ol>
+  <li><strong>Estimate</strong> what each car should cost (for pricing / readiness) before every invoice is in.</li>
+  <li><strong>Allocate real posted expenses</strong> onto the right cars when accounting documents exist.</li>
+  <li>Keep estimates and actuals connected through one shared dictionary of cost lines (<strong>Costing masters</strong>).</li>
+</ol>
+
+<svg class="flow" viewBox="0 0 720 155" xmlns="http://www.w3.org/2000/svg">
+  <rect x="8" y="40" width="115" height="55" rx="7" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="65" y="62" text-anchor="middle" font-size="10" font-weight="700">Cars imported</text>
+  <text x="65" y="78" text-anchor="middle" font-size="8.5">Item + Import File</text>
+  <path d="M123 67 H150" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+  <defs><marker id="arr" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0L5,3L0,6Z" fill="#334155"/></marker></defs>
+  <rect x="150" y="20" width="130" height="95" rx="7" fill="#fef3c7" stroke="#d97706"/>
+  <text x="215" y="45" text-anchor="middle" font-size="10" font-weight="700">Car Costing</text>
+  <text x="215" y="62" text-anchor="middle" font-size="8.5">PROJECTED</text>
+  <text x="215" y="78" text-anchor="middle" font-size="8.5">estimate per car</text>
+  <text x="215" y="94" text-anchor="middle" font-size="8.5">from Excel rules</text>
+  <path d="M280 67 H310" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="310" y="20" width="130" height="95" rx="7" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="375" y="45" text-anchor="middle" font-size="10" font-weight="700">JE / PI posted</text>
+  <text x="375" y="62" text-anchor="middle" font-size="8.5">real money</text>
+  <text x="375" y="78" text-anchor="middle" font-size="8.5">on Import File</text>
+  <text x="375" y="94" text-anchor="middle" font-size="8.5">accounts books</text>
+  <path d="M440 67 H470" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="470" y="20" width="115" height="95" rx="7" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="527" y="45" text-anchor="middle" font-size="10" font-weight="700">IFCV</text>
+  <text x="527" y="62" text-anchor="middle" font-size="8.5">split / map</text>
+  <text x="527" y="78" text-anchor="middle" font-size="8.5">to each car</text>
+  <text x="527" y="94" text-anchor="middle" font-size="8.5">then push</text>
+  <path d="M585 67 H615" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="615" y="40" width="95" height="55" rx="7" fill="#fce7f3" stroke="#db2777"/>
+  <text x="662" y="62" text-anchor="middle" font-size="9.5" font-weight="700">Updated</text>
+  <text x="662" y="78" text-anchor="middle" font-size="8.5">Car Costings</text>
+</svg>
+<p class="caption">Figure A — End-to-end journey from imported cars to updated per-car costs.</p>
+
+<!-- ================= 2 ================= -->
+<h2>2. Core idea: Projected vs Actual</h2>
+<div class="grid2">
+  <div class="card">
+    <h4>Projected (Expected)</h4>
+    <p>What we <em>think</em> the car will cost, based on:</p>
+    <ul>
+      <li>Fixed defaults (Ex-Bond, Service…)</li>
+      <li>User-entered variables (TRA Duty, M3-driven shares)</li>
+      <li>Formulas (Wharfage = Duty × 7%)</li>
+    </ul>
+    <p><strong>Where:</strong> <em>Car Costing</em> document.</p>
+  </div>
+  <div class="card">
+    <h4>Actual (Posted)</h4>
+    <p>What accounts <em>really booked</em> in ERPNext:</p>
+    <ul>
+      <li>Journal Entry debit lines</li>
+      <li>Purchase Invoice item amounts</li>
+      <li>Linked to an Import File</li>
+    </ul>
+    <p><strong>Where collected:</strong> <em>Import File Cost Voucher (IFCV)</em>.</p>
+  </div>
+</div>
+<div class="callout blue">
+  Your expense-list spreadsheet already said this: some lines are <strong>Expected By Vehicle</strong> but <strong>Actual By BL</strong>
+  (e.g. Clearing Container, Wharfage, TPA). That gap is exactly why IFCV exists — it takes a BL total and divides it back onto cars.
+</div>
+<img class="shot" src="assets/expense-list-rules.png" alt="Expense list Expected vs Actual"/>
+<p class="caption">Figure B — Business rules sheet: Expected vs Actual, Fixed vs Variable, By Vehicle vs By BL.</p>
+
+<!-- ================= 3 ================= -->
+<div class="pagebreak"></div>
+<h2>3. The three building blocks</h2>
+<table>
+  <tr><th>DocType</th><th>One record means…</th><th>Main job</th></tr>
+  <tr>
+    <td><strong>Costing</strong></td>
+    <td>One type of cost (e.g. TRA Duty)</td>
+    <td>Master rule: Fixed/Variable/Formula, currency, GL account, By Vehicle vs By BL</td>
+  </tr>
+  <tr>
+    <td><strong>Car Costing</strong></td>
+    <td>One car on one Import File</td>
+    <td>Build projected TZ + Japan lines and landed COST</td>
+  </tr>
+  <tr>
+    <td><strong>Import File Cost Voucher</strong></td>
+    <td>One Import File / shipment batch</td>
+    <td>Pull posted JE/PI, allocate to cars, optionally push into Car Costings</td>
+  </tr>
+</table>
+<p>
+Supporting idea: every car is an <strong>Item</strong>. Cars on a shipment share an <strong>Import File</strong>
+(named like the supplier invoice). Matching rule for vehicles:
+</p>
+<ol>
+  <li>Prefer <code>Import File.bl_number</code> → <code>Item.custom_bl</code></li>
+  <li>If BL blank, use <code>Import File.supplier_invoice_no</code> → <code>Item.custom_bl</code></li>
+</ol>
+
+<!-- ================= 4 ================= -->
+<h2>4. Glossary</h2>
+<table>
+  <tr><th>Term</th><th>Meaning</th></tr>
+  <tr><td>BL</td><td>Bill of Lading — shipping document grouping cars (e.g. MEDUW3445865)</td></tr>
+  <tr><td>Import File</td><td>ERPNext document for a supplier invoice / shipment batch (e.g. N.TAN039/26MSC)</td></tr>
+  <tr><td>M3</td><td>Cubic metres of the car — used to share shipping/ICD fairly</td></tr>
+  <tr><td>Costing</td><td>Named cost type with rules and optional GL account</td></tr>
+  <tr><td>Projected amount</td><td>Estimate on a Car Costing line</td></tr>
+  <tr><td>Allocation</td><td>Share of an IFCV expense assigned to one Item/car</td></tr>
+  <tr><td>By BL Equal</td><td>Split expense equally across all cars on the Import File</td></tr>
+  <tr><td>By BL M3</td><td>Split expense proportional to each car’s M3</td></tr>
+  <tr><td>By Vehicle Manual</td><td>User (or auto chassis match) assigns amounts per car</td></tr>
+  <tr><td>Landed COST</td><td>TOTAL COST USD × TZS/USD exchange (our projected COST)</td></tr>
+</table>
+
+<!-- ================= 5 ================= -->
+<div class="pagebreak"></div>
+<h2>5. Costing — every field explained</h2>
+<p>
+Open: Desk → <strong>Costing</strong>. This is configuration, usually maintained by a super user, not changed daily.
+</p>
+<table>
+  <tr><th>Field</th><th>What it does</th><th>How to explain it</th></tr>
+  <tr>
+    <td class="field-name">Costing Code</td>
+    <td>Internal unique key (e.g. <code>tra_duty</code>)</td>
+    <td>Used by formulas and IFCV mapping. Do not rename casually.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Costing Name</td>
+    <td>Label people see (e.g. TRA DUTY)</td>
+    <td>Matches the expense-list wording.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Region</td>
+    <td>Tanzania or Japan</td>
+    <td>Controls which table on Car Costing the line appears in (TZS vs USD).</td>
+  </tr>
+  <tr>
+    <td class="field-name">Entry Mode</td>
+    <td><span class="badge b-fix">Fixed</span> <span class="badge b-var">Variable</span> <span class="badge b-form">Formula</span></td>
+    <td>
+      <strong>Fixed</strong> = system fills default (editable).<br/>
+      <strong>Variable</strong> = user types the estimate for this car.<br/>
+      <strong>Formula</strong> = system calculates (user should not invent the number).
+    </td>
+  </tr>
+  <tr>
+    <td class="field-name">Allocation Scope</td>
+    <td><span class="badge b-veh">By Vehicle</span> or <span class="badge b-bl">By BL</span></td>
+    <td>
+      Tells IFCV how <em>actuals</em> usually arrive.<br/>
+      By Vehicle → Manual mapping dialog.<br/>
+      By BL → Equal or M3 split of one bulk amount.
+    </td>
+  </tr>
+  <tr>
+    <td class="field-name">Account</td>
+    <td>Link to Chart of Accounts</td>
+    <td><strong>Critical for IFCV.</strong> When a JE/PI posts to this account, IFCV auto-selects this Costing.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Currency</td>
+    <td>TZS or USD (etc.)</td>
+    <td>Drives currency on Car Costing lines.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Default Projected Amount</td>
+    <td>Used when Entry Mode = Fixed</td>
+    <td>Example: Ex-Bond 139,314; Japan Cost 261; Inspection 170.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Display Order</td>
+    <td>Sort order on the form</td>
+    <td>Cosmetic / evaluation order only. Not Excel import sequence.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Formula / Depends On</td>
+    <td>Calculation expression</td>
+    <td>Example Wharfage: <code>{line.tra_duty} * 0.07</code> (matches Excel Duty×7%).</td>
+  </tr>
+  <tr>
+    <td class="field-name">Disabled</td>
+    <td>Hide obsolete heads</td>
+    <td>Old heads (e.g. M3-as-cost-line) stay disabled, not deleted.</td>
+  </tr>
+</table>
+
+<div class="callout warn">
+  <strong>Teaching tip:</strong> “Costing is the dictionary. Car Costing writes sentences with that dictionary. IFCV finds real invoices and attaches the right dictionary word via the Account link.”
+</div>
+
+<!-- ================= 6 ================= -->
+<div class="pagebreak"></div>
+<h2>6. Car Costing — every field &amp; button</h2>
+<p>
+Open: Desk → <strong>Car Costing</strong>. One document = one car’s projected cost worksheet.
+</p>
+
+<h3>6.1 Header fields</h3>
+<table>
+  <tr><th>Field</th><th>What happens / what user does</th></tr>
+  <tr><td class="field-name">Series</td><td>Auto name like <code>CC-2026-00024</code>. Leave default.</td></tr>
+  <tr><td class="field-name">Item</td><td><strong>Required.</strong> Pick the car Item. On a new doc, selecting Item triggers Load from Item.</td></tr>
+  <tr><td class="field-name">Import File</td><td>Links this costing to the shipment (e.g. N.TAN039/26MSC). Auto-resolved from Item BL when possible.</td></tr>
+  <tr><td class="field-name">Costing Date</td><td>Date of this worksheet (defaults Today).</td></tr>
+  <tr><td class="field-name">Exchange Rate (TZS/USD)</td><td><strong>Required.</strong> Converts USD summaries to TZS COST. Excel sample uses 2700.</td></tr>
+  <tr><td class="field-name">YEN/USD Rate</td><td>Converts purchase Yen to USD (default 155).</td></tr>
+  <tr><td class="field-name">Chassis / Maker / Model</td><td>Read-only, fetched from Item. For identification only.</td></tr>
+  <tr><td class="field-name">M3</td><td>Car volume. Header field (not a cost line). Needed for M3-based shares and readiness.</td></tr>
+  <tr><td class="field-name">YEN</td><td>Purchase price from Item (<code>custom_price</code>), read-only on form.</td></tr>
+</table>
+
+<h3>6.2 Child tables</h3>
+<div class="grid2">
+  <div class="card">
+    <h4>Tanzania Costing Lines <span class="badge b-tz">TZS</span></h4>
+    <p>Examples: TRA Duty, Clearing, Ex-Bond, Service, Wharfage, Driver, Fuel, TPA, Bond Insurance, Local Repair.</p>
+    <p>Each row: Costing, code, mode, account, currency, <strong>Projected Amount</strong>, override flag, remarks.</p>
+  </div>
+  <div class="card">
+    <h4>Japan Costing Lines <span class="badge b-jp">USD</span></h4>
+    <p>Examples: Japan Cost, Inspection, ICD, Shipping Line.</p>
+    <p>Same structure as TZ table, different currency/region.</p>
+  </div>
+</div>
+
+<h3>6.3 Summary fields (calculated — usually read-only)</h3>
+<table>
+  <tr><th>Field</th><th>Meaning (Excel-aligned)</th></tr>
+  <tr><td class="field-name">TOTAL EXP TSH</td><td>Sum of TZ lines <strong>excluding TRA Duty</strong> (Excel col Y = Q…X).</td></tr>
+  <tr><td class="field-name">TSH TO USD</td><td>TOTAL EXP TSH ÷ Exchange Rate.</td></tr>
+  <tr><td class="field-name">TOTAL EXP USD</td><td>TSH TO USD + all Japan line amounts.</td></tr>
+  <tr><td class="field-name">YEN IN USD</td><td>YEN ÷ YEN/USD rate.</td></tr>
+  <tr><td class="field-name">TOTAL COST USD</td><td>Duty USD + TOTAL EXP USD + YEN IN USD.</td></tr>
+  <tr><td class="field-name">COST</td><td>TOTAL COST USD × Exchange Rate = <strong>landed cost in TZS</strong>.</td></tr>
+  <tr><td class="field-name">PRICE</td><td>Currently same as COST (selling margin/VAT from Excel not applied yet).</td></tr>
+  <tr><td class="field-name">Days Since Purchase</td><td>Informational age of stock.</td></tr>
+  <tr><td class="field-name">Readiness</td><td>HTML checklist (Item, Import File, FX, M3, TRA Duty). Display only.</td></tr>
+</table>
+<div class="callout warn">
+  Excel’s COST column also adds City Levy + VAT derived from a selling price. Our COST is the <strong>landed</strong> figure (TOTAL COST USD × FX). Explain that difference when comparing to Excel.
+</div>
+
+<h3>6.4 Buttons on Car Costing</h3>
+<table>
+  <tr><th>Control</th><th>When available</th><th>What it does</th></tr>
+  <tr>
+    <td><span class="btn">Load from Item</span></td>
+    <td>Always on form</td>
+    <td>
+      Rebuilds TZ + Japan lines from active Costing masters; pulls chassis/maker/model/Yen/M3 from Item;
+      fills Fixed defaults; keeps existing projected amounts where present; recalculates; saves.
+      On new docs, selecting Item calls this automatically.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="btn green">Actions → Recalculate</span></td>
+    <td>Saved documents only</td>
+    <td>
+      Re-runs Fixed + Formula lines and summary math. Shows alert with Cost / Price.
+      Use after changing Duty, M3, rates, or overrides.
+    </td>
+  </tr>
+  <tr>
+    <td><span class="btn blue">Save</span></td>
+    <td>Draft</td>
+    <td>Validates exchange rate and recalculates during validate.</td>
+  </tr>
+  <tr>
+    <td><span class="btn">Submit</span></td>
+    <td>Draft, when ready</td>
+    <td>
+      Locks the Car Costing and copies projected lines + cost/price/M3 onto the Item’s Costing tab
+      (<code>custom_tz_costing</code>, <code>custom_japan_costing</code>, etc.).
+    </td>
+  </tr>
+  <tr>
+    <td><span class="btn grey">Cancel / Amend</span></td>
+    <td>Submitted</td>
+    <td>Standard ERPNext cancel/amend if corrections needed after submit.</td>
+  </tr>
+</table>
+
+<h3>6.5 How to teach “what do I type?”</h3>
+<ul>
+  <li><strong>Fixed rows:</strong> usually leave alone (unless business overrides).</li>
+  <li><strong>Variable rows:</strong> type the car’s estimate (TRA Duty from TRA; ICD/Shipping if known per car).</li>
+  <li><strong>Formula rows:</strong> do not type — click Recalculate after changing inputs (Duty).</li>
+  <li><strong>M3 + rates:</strong> keep accurate; they drive many results.</li>
+</ul>
+
+<!-- ================= 7 ================= -->
+<div class="pagebreak"></div>
+<h2>7. Import File Cost Voucher (IFCV) — every field &amp; button</h2>
+<p>
+Open: Desk → <strong>Import File Cost Voucher</strong>. One document = one Import File’s actual expense allocation worksheet.
+</p>
+
+<h3>7.1 Header fields</h3>
+<table>
+  <tr><th>Field</th><th>What it does</th></tr>
+  <tr>
+    <td class="field-name">Series</td>
+    <td>Auto name like <code>IFCV-2026-00001</code>.</td>
+  </tr>
+  <tr>
+    <td class="field-name">Import File</td>
+    <td>
+      <strong>Required.</strong> Selecting it <em>auto-loads</em> Vehicles + Expenses from the database
+      (submitted JE/PI linked to that Import File).
+    </td>
+  </tr>
+  <tr>
+    <td class="field-name">Posting Date</td>
+    <td>Voucher date (defaults Today).</td>
+  </tr>
+  <tr>
+    <td class="field-name">Auto Update Car Costing Projected</td>
+    <td>
+      If checked, on <strong>Submit</strong> IFCV writes allocated amounts into matching draft Car Costing lines
+      and recalculates those cars.
+    </td>
+  </tr>
+  <tr>
+    <td class="field-name">Default Distribution Basis</td>
+    <td>
+      <strong>Equal</strong> or <strong>M3</strong>. Affects how newly loaded By-BL expenses are proposed
+      (By BL Equal vs By BL M3). Changing it reloads from Import File.
+    </td>
+  </tr>
+</table>
+
+<h3>7.2 Table: Vehicles on this Import File</h3>
+<p>Auto-filled list of cars. Columns typically include Item, Chassis, Maker, M3, Stock ID.</p>
+<ul>
+  <li>These are the cars that will receive allocations.</li>
+  <li>M3 values here drive <strong>By BL M3</strong> math.</li>
+  <li>Usually do not invent rows — reload from Import File if cars are missing.</li>
+</ul>
+
+<h3>7.3 Table: Posted Expenses (from JE / PI)</h3>
+<table>
+  <tr><th>Column</th><th>Meaning</th></tr>
+  <tr><td class="field-name">Expense Account</td><td>GL account from JE/PI line.</td></tr>
+  <tr><td class="field-name">Description</td><td>Prefer JE user remark (often contains chassis) else title.</td></tr>
+  <tr><td class="field-name">Amount</td><td>Company currency amount to allocate.</td></tr>
+  <tr><td class="field-name">Source</td><td>JE/PI document name (audit trail).</td></tr>
+  <tr><td class="field-name">Costing</td><td>Auto if Account matches a Costing; else set manually.</td></tr>
+  <tr><td class="field-name">Code</td><td>Fetched from Costing.</td></tr>
+  <tr><td class="field-name">Distribution Method</td><td>
+    <span class="badge b-bl">By BL Equal</span>
+    <span class="badge b-bl">By BL M3</span>
+    <span class="badge b-veh">By Vehicle Manual</span>
+  </td></tr>
+  <tr><td class="field-name">Remarks</td><td>Optional notes.</td></tr>
+</table>
+<div class="callout rose">
+  <strong>Stock In Hand rows are ignored on purpose.</strong> Those Purchase Invoice lines are the car purchase stock value (Yen), not a distributeable landed expense.
+</div>
+<p>
+When you pick a Costing on an expense row:
+</p>
+<ul>
+  <li>If head Allocation Scope = By Vehicle → method becomes <strong>By Vehicle Manual</strong>.</li>
+  <li>If head is By BL → method becomes Equal or M3 based on Default Distribution Basis.</li>
+</ul>
+
+<h3>7.4 Table: Mapped Vehicle Allocations</h3>
+<p>
+Result table: each row is “this Item gets this Costing / account for this amount, from expense row #N”.
+</p>
+<ul>
+  <li>Auto-built on Save for Equal / M3.</li>
+  <li>For Manual: filled by dialog (or auto if chassis found in description/remark).</li>
+  <li><strong>Total Expense Amount</strong> should equal <strong>Total Allocated Amount</strong> before submit.</li>
+</ul>
+
+<svg class="flow" viewBox="0 0 720 175" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="20" width="220" height="135" rx="8" fill="#eef2ff" stroke="#4338ca"/>
+  <text x="120" y="45" text-anchor="middle" font-size="11" font-weight="700" fill="#312e81">By BL Equal</text>
+  <text x="120" y="70" text-anchor="middle" font-size="9">amount ÷ cars</text>
+  <text x="120" y="95" text-anchor="middle" font-size="8.5">Clearing 786,450 ÷ 7</text>
+  <text x="120" y="112" text-anchor="middle" font-size="8.5">= 112,350 each</text>
+  <text x="120" y="138" text-anchor="middle" font-size="8.5">Also TPA, Wharfage totals</text>
+
+  <rect x="250" y="20" width="220" height="135" rx="8" fill="#ecfeff" stroke="#0e7490"/>
+  <text x="360" y="45" text-anchor="middle" font-size="11" font-weight="700" fill="#155e75">By BL M3</text>
+  <text x="360" y="70" text-anchor="middle" font-size="9">amount × (m3 / Σm3)</text>
+  <text x="360" y="95" text-anchor="middle" font-size="8.5">Shipping / ICD</text>
+  <text x="360" y="112" text-anchor="middle" font-size="8.5">matches Excel m3×rate</text>
+  <text x="360" y="138" text-anchor="middle" font-size="8.5">Needs correct M3 on cars</text>
+
+  <rect x="490" y="20" width="220" height="135" rx="8" fill="#fff1f2" stroke="#be123c"/>
+  <text x="600" y="45" text-anchor="middle" font-size="11" font-weight="700" fill="#9f1239">By Vehicle Manual</text>
+  <text x="600" y="70" text-anchor="middle" font-size="9">map to specific cars</text>
+  <text x="600" y="95" text-anchor="middle" font-size="8.5">TRA Duty, Ex-Bond,</text>
+  <text x="600" y="112" text-anchor="middle" font-size="8.5">Inspection, Japan Cost…</text>
+  <text x="600" y="138" text-anchor="middle" font-size="8.5">Dialog or chassis auto-map</text>
+</svg>
+<p class="caption">Figure C — The three distribution methods you must teach.</p>
+
+<h3>7.5 Buttons on IFCV</h3>
+<table>
+  <tr><th>Control</th><th>What it does</th><th>When to use</th></tr>
+  <tr>
+    <td><span class="btn">Actions → Reload from Import File</span></td>
+    <td>Re-reads vehicles + JE/PI expenses for the selected Import File. Clears and rebuilds Vehicles/Expenses tables (allocations cleared until save).</td>
+    <td>After new JVs/PIs were posted, or if tables look stale.</td>
+  </tr>
+  <tr>
+    <td><span class="btn">Actions → Rebuild Allocations</span></td>
+    <td>Simply <strong>saves</strong> the document, which runs distribution logic again.</td>
+    <td>After changing distribution methods or amounts.</td>
+  </tr>
+  <tr>
+    <td><span class="btn green">Actions → Distribute Manually</span></td>
+    <td>
+      Opens dialog for expense rows marked <em>By Vehicle Manual</em>.
+      Pick expense row → edit amounts per vehicle → Remaining must be ~0 → Apply.
+      Includes “Quick: put full amount on one car”.
+      If remark contains chassis, amounts default to that car.
+    </td>
+    <td>Any By Vehicle actual (per-car JE), or when auto-map is wrong.</td>
+  </tr>
+  <tr>
+    <td><span class="btn blue">Save</span></td>
+    <td>Validates and rebuilds allocations; updates totals.</td>
+    <td>Before submit; after edits.</td>
+  </tr>
+  <tr>
+    <td><span class="btn">Submit</span></td>
+    <td>
+      Locks voucher. If Auto Update is on, pushes allocations into draft Car Costings
+      (matching Import File + Item) and recalculates them.
+    </td>
+    <td>When allocation review is finished.</td>
+  </tr>
+</table>
+
+<h3>7.6 Manual distribution dialog — teach this carefully</h3>
+<ol>
+  <li>Save IFCV first (dialog requires a saved name).</li>
+  <li>Actions → <strong>Distribute Manually</strong>.</li>
+  <li>Choose expense row from dropdown (shows code, amount, description/chassis hint).</li>
+  <li>Optional: Quick assign full amount to one Item.</li>
+  <li>Watch summary: Expense | Allocated | Remaining (green when zero).</li>
+  <li>Apply → allocations saved → form reloads.</li>
+</ol>
+<div class="callout">
+  <strong>Best practice for Accounts:</strong> When posting a per-car Journal Entry, put the chassis in <em>User Remark</em>
+  (e.g. <code>ZRR70-0198971 | TOYOTA NOAH…</code>). IFCV can then auto-map without clicking through every row.
+</div>
+
+<!-- ================= 8 ================= -->
+<div class="pagebreak"></div>
+<h2>8. Worked example — N.TAN039/26MSC</h2>
+<p>
+<strong>Import File:</strong> N.TAN039/26MSC &nbsp;·&nbsp; <strong>BL:</strong> MEDUW3445865 &nbsp;·&nbsp; <strong>Cars:</strong> 7
+</p>
+<div class="steps">
+  <div class="step">
+    <strong>Cars already exist as Items</strong> with BL MEDUW3445865 (from Item Excel Import earlier).
+  </div>
+  <div class="step">
+    <strong>Car Costings created (projected)</strong> for all 7 chassis using Excel NEW COST FILE values
+    (M3, TRA Duty, TPA, ICD, Shipping, Fixed defaults). Wharfage calculated as Duty × 7%.
+    Example Noah landed COST = TZS 19,999,903.70.
+  </div>
+  <div class="step">
+    <strong>Actual By BL journals</strong> posted (one total each): Clearing, TPA, Wharfage, ICD, Shipping Line.
+    IFCV splits Equal or M3. ICD/Shipping M3 shares match Excel.
+  </div>
+  <div class="step">
+    <strong>Actual By Vehicle journals</strong> posted per car: TRA Duty, Ex-Bond, Service, Driver, Bond Insurance,
+    Inspection (mapped to Inspection JPY), Japan Cost (mapped to JPN Expense JPY).
+  </div>
+  <div class="step">
+    <strong>IFCV-2026-00001</strong> loads 7 vehicles + expenses, ignores Stock In Hand from the purchase invoice,
+    maps Costing masters via accounts, allocates, balances totals.
+  </div>
+  <div class="step">
+    <strong>Next teaching step:</strong> Submit IFCV with Auto Update on, then open a Car Costing and show the projected lines updated from allocations.
+  </div>
+</div>
+
+<!-- ================= 9 ================= -->
+<h2>9. FAQ, rules, and common mistakes</h2>
+<table>
+  <tr><th>Question / mistake</th><th>Clear answer</th></tr>
+  <tr>
+    <td>Why is Costing blank on an expense?</td>
+    <td>JE/PI account is not linked on any Costing. Set Costing.Account to that GL account, then Reload.</td>
+  </tr>
+  <tr>
+    <td>Why did Stock In Hand appear before?</td>
+    <td>It is the car purchase. System now skips Stock / Stock In Hand accounts on purpose.</td>
+  </tr>
+  <tr>
+    <td>Why doesn’t Excel COST match our COST?</td>
+    <td>Excel adds City Levy + VAT from selling price. We show landed COST only (for now).</td>
+  </tr>
+  <tr>
+    <td>Wharfage 7% or 7.5%?</td>
+    <td>Excel formula is Duty×7%. Use 7%. (Some notes sheets said 7.5% — Excel wins.)</td>
+  </tr>
+  <tr>
+    <td>Manual dialog says no rows</td>
+    <td>No expense is set to By Vehicle Manual. Set Costing / method, Save, try again.</td>
+  </tr>
+  <tr>
+    <td>Vehicles = 0 on IFCV</td>
+    <td>Import File BL/supplier invoice doesn’t match Item.custom_bl, or cars disabled.</td>
+  </tr>
+  <tr>
+    <td>Recalculate crashed on readiness_html</td>
+    <td>Fixed: HTML field is display-only; recalculate no longer db_sets it.</td>
+  </tr>
+  <tr>
+    <td>Can one BL JV replace seven per-car JVs?</td>
+    <td>Yes for By BL costs. For By Vehicle actuals, either post per car (best) or post one total and distribute manually in the dialog.</td>
+  </tr>
+</table>
+
+<!-- ================= 10 ================= -->
+<div class="pagebreak"></div>
+<h2>10. Recommended daily workflow checklist</h2>
+<h3>For the Costing / Ops user</h3>
+<ol>
+  <li>Confirm Import File and cars exist.</li>
+  <li>Create/open Car Costing per car → Load from Item.</li>
+  <li>Enter Variable estimates (Duty, etc.), confirm M3 &amp; rates.</li>
+  <li>Recalculate → review COST.</li>
+  <li>Keep as Draft until actuals are reviewed (or Submit when estimate is approved).</li>
+</ol>
+<h3>For the Accounts user</h3>
+<ol>
+  <li>Post JE/PI with <strong>Import File</strong> set.</li>
+  <li>Use correct expense accounts (that exist on Costing masters).</li>
+  <li>For per-car costs, put chassis in JE User Remark.</li>
+  <li>Never expect Stock In Hand to be distributed as a costing expense.</li>
+</ol>
+<h3>For the Costing user after postings</h3>
+<ol>
+  <li>Open/create IFCV → select Import File (or Reload).</li>
+  <li>Check Costing masters + distribution methods.</li>
+  <li>Distribute Manually where needed.</li>
+  <li>Confirm Expense total = Allocated total.</li>
+  <li>Submit with Auto Update → spot-check Car Costings.</li>
+</ol>
+
+<div class="callout blue">
+  <strong>One sentence you can say in a meeting:</strong><br/>
+  “Car Costing is our per-car estimate using the Excel rules; Import File Cost Voucher is how we take real journals and invoices on a shipment and fairly attach them to each car — equally, by M3, or by manual/per-car mapping — then push those shares back into the car estimates.”
+</div>
+
+<p class="small" style="margin-top:16pt;">
+  Document: Car Costing &amp; IFCV Training Manual · vsd_jan_integration · based on live design for Jan International.<br/>
+  Source numbers validated against workspace file <code>1 BL COST.xlsx</code> (NEW COST FILE).
+</p>
+
+</body>
+</html>

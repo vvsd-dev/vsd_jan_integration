@@ -16,7 +16,11 @@ frappe.ui.form.on('Item Excel Importer', {
 		frm.trigger('render_progress_html');
 
 		if (!frm.is_new() && frm.doc.excel_file) {
-			if (frm.doc.import_status !== 'Queued' && frm.doc.import_status !== 'In Progress') {
+			var status = frm.doc.import_status;
+			var import_busy = (status === 'Queued' || status === 'In Progress');
+
+			// Only offer Start Import before the first run (and never while a job is running).
+			if (status === 'Pending' && !import_busy) {
 				frm.add_custom_button(__('Start Import'), function() {
 					frappe.confirm(
 						__('Are you sure you want to process and import items from this Excel file in the background?'),
@@ -32,6 +36,7 @@ frappe.ui.form.on('Item Excel Importer', {
 							frm.trigger('setup_realtime_listener');
 							frm.trigger('render_progress_html');
 							frm.trigger('start_live_timer');
+							frm.remove_custom_button(__('Start Import'));
 
 							frappe.call({
 								method: 'vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.enqueue_import',
@@ -99,6 +104,31 @@ frappe.ui.form.on('Item Excel Importer', {
 					);
 				}).addClass('btn-danger');
 			}
+
+			// Administrator-only: wipe created Items from this run and reset to Pending
+			if (frappe.session.user === 'Administrator' && status !== 'Pending') {
+				frm.add_custom_button(__('Undo Import'), function() {
+					frappe.confirm(
+						__(
+							'UNDO will delete Items that were <b>Created</b> by this import (plus their draft Car Costings / Fixed JEs), clear the log, and reset status to <b>Pending</b> so you can Start Import again.<br><br>Updated existing Items are kept. This cannot be undone easily. Continue?'
+						),
+						function() {
+							frappe.call({
+								method: 'vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.undo_import',
+								args: { docname: frm.doc.name },
+								freeze: true,
+								freeze_message: __('Undoing import… deleting created Items'),
+								callback: function(r) {
+									if (r.exc) return;
+									var msg = (r.message && r.message.message) || __('Import undone.');
+									frappe.show_alert({ message: msg, indicator: 'orange' });
+									frm.reload_doc();
+								}
+							});
+						}
+					);
+				}).addClass('btn-warning');
+			}
 		}
 	},
 
@@ -132,6 +162,11 @@ frappe.ui.form.on('Item Excel Importer', {
 				frm.active_step_text = data.active_step_text || '';
 				frm.progress_percent = data.percent !== undefined ? data.percent : (frm.progress_percent || 0);
 				frm.trigger('render_progress_html');
+
+				if (data.status === 'In Progress' || data.status === 'Queued') {
+					frm.remove_custom_button(__('Start Import'));
+					frm.remove_custom_button(__('Retry Failed'));
+				}
 
 				if (data.status && data.status !== 'In Progress' && data.status !== 'Queued') {
 					if (frm._timer_interval) {
@@ -180,6 +215,8 @@ frappe.ui.form.on('Item Excel Importer', {
 	render_progress_html: function(frm) {
 		if (!frm.fields_dict.progress_html) return;
 		var status = frm.doc.import_status;
+
+		// Only hide when truly idle. Keep card on reload for Queued/In Progress/Completed*.
 		if (!status || status === 'Pending') {
 			if (frm._timer_interval) {
 				clearInterval(frm._timer_interval);
@@ -194,8 +231,9 @@ frappe.ui.form.on('Item Excel Importer', {
 			if (status === 'Completed' || status === 'Completed with Errors') {
 				percent = 100;
 			} else {
-				var tot = (frm.doc.total_invoices || 0) + (frm.doc.total_cars || 0);
-				var proc = (frm.doc.processed_invoices || 0) + (frm.doc.processed_cars || 0);
+				var is_mukechi_pct = (frm.doc.import_type === 'Mukechi');
+				var tot = is_mukechi_pct ? (frm.doc.total_cars || 0) : ((frm.doc.total_invoices || 0) + (frm.doc.total_cars || 0));
+				var proc = is_mukechi_pct ? (frm.doc.processed_cars || 0) : ((frm.doc.processed_invoices || 0) + (frm.doc.processed_cars || 0));
 				percent = tot > 0 ? Math.min(100, Math.round((proc / tot) * 100)) : 0;
 			}
 		}
@@ -203,7 +241,26 @@ frappe.ui.form.on('Item Excel Importer', {
 			percent = 100;
 		}
 
-		var step_text = frm.active_step_text || (status === 'Completed' ? 'Import completed successfully.' : (status === 'Completed with Errors' ? 'Import completed with errors.' : 'Processing import...'));
+		var step_text = frm.active_step_text;
+		if (!step_text) {
+			if (status === 'Completed') {
+				step_text = 'Import completed successfully.';
+			} else if (status === 'Completed with Errors') {
+				step_text = 'Import completed with errors.';
+			} else if (status === 'Queued') {
+				step_text = 'Import job queued in background...';
+			} else if (status === 'In Progress') {
+				if ((frm.doc.import_type || '') === 'Mukechi') {
+					step_text = 'Processing Mukechi cars ' + (frm.doc.processed_cars || 0) + ' / ' + (frm.doc.total_cars || 0) + '...';
+				} else if ((frm.doc.processed_invoices || 0) < (frm.doc.total_invoices || 0)) {
+					step_text = 'Creating/Updating Purchase Invoices ' + (frm.doc.processed_invoices || 0) + ' / ' + (frm.doc.total_invoices || 0) + '...';
+				} else {
+					step_text = 'Updating Car Items ' + (frm.doc.processed_cars || 0) + ' / ' + (frm.doc.total_cars || 0) + '...';
+				}
+			} else {
+				step_text = 'Processing import...';
+			}
+		}
 		var indicator = 'info';
 		var bg_class = 'bg-primary';
 
@@ -237,6 +294,9 @@ frappe.ui.form.on('Item Excel Importer', {
 			`;
 		}
 
+		var is_mukechi = (frm.doc.import_type === 'Mukechi');
+		var invoices_html = is_mukechi ? '' : `<div><i class="fa fa-file-text-o" style="margin-right: 4px;"></i><strong>Invoices:</strong> ${frm.doc.processed_invoices || 0} / ${frm.doc.total_invoices || 0}</div>`;
+
 		var html = `
 			<div class="import-progress-card" style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; margin-bottom: 20px; background-color: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
 				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -251,7 +311,7 @@ frappe.ui.form.on('Item Excel Importer', {
 					<span>${step_text}</span>
 				</div>
 				<div style="display: flex; flex-wrap: wrap; gap: 20px; font-size: 12px; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 10px;">
-					<div><i class="fa fa-file-text-o" style="margin-right: 4px;"></i><strong>Invoices:</strong> ${frm.doc.processed_invoices || 0} / ${frm.doc.total_invoices || 0}</div>
+					${invoices_html}
 					<div><i class="fa fa-car" style="margin-right: 4px;"></i><strong>Cars:</strong> ${frm.doc.processed_cars || 0} / ${frm.doc.total_cars || 0}</div>
 					${timing_details_html}
 				</div>

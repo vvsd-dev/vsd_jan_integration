@@ -8,6 +8,7 @@ import time
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.utils import cint, flt, sbool
 from frappe.utils.file_manager import get_file_path
 
 
@@ -39,6 +40,8 @@ class ItemExcelImporter(Document):
 
 @frappe.whitelist()
 def enqueue_import(docname, retry_failed_only=False):
+	# Whitelist args arrive as strings; "false" is truthy in Python.
+	retry_failed_only = sbool(retry_failed_only)
 	importer = frappe.get_doc("Item Excel Importer", docname)
 	if not importer.excel_file:
 		frappe.throw(_("Please attach an Excel file before importing."))
@@ -73,6 +76,7 @@ def enqueue_import(docname, retry_failed_only=False):
 
 
 def run_import_job(docname, retry_failed_only=False):
+	retry_failed_only = sbool(retry_failed_only)
 	importer = frappe.get_doc("Item Excel Importer", docname)
 	importer.db_set("import_status", "In Progress")
 
@@ -112,7 +116,12 @@ def run_import_job(docname, retry_failed_only=False):
 			status = "Completed" if res["errors"] == 0 else "Completed with Errors"
 			failed_records_json = json.dumps(res["failed_records"], indent=2, cls=DateTimeEncoder)
 		else:
-			res = process_mukechi_import(file_path, docname=docname)
+			res = process_mukechi_import(
+				file_path,
+				docname=docname,
+				retry_failed_only=retry_failed_only,
+				prev_failed_records=importer.get("failed_records"),
+			)
 			summary = (
 				f"Detected Format: Mukechi\n"
 				f"Summary: Created {res['created']} Items, Updated {res['updated']} Items, Errors: {res['errors']}\n\n"
@@ -121,10 +130,18 @@ def run_import_job(docname, retry_failed_only=False):
 			status = "Completed" if res["errors"] == 0 else "Completed with Errors"
 			failed_records_json = json.dumps(res.get("failed_records", []), indent=2, cls=DateTimeEncoder)
 
-		total_invoices = res.get("total_invoices") or importer.get("total_invoices") or 0
-		processed_invoices = res.get("processed_invoices") or (res.get("created_pi", 0) + res.get("updated_pi", 0)) or 0
-		total_cars = res.get("total_cars") or importer.get("total_cars") or 0
-		processed_cars = res.get("processed_cars") or res.get("updated_items", 0) or 0
+		total_invoices = res.get("total_invoices")
+		if total_invoices is None:
+			total_invoices = importer.get("total_invoices") or 0
+		processed_invoices = res.get("processed_invoices")
+		if processed_invoices is None:
+			processed_invoices = (res.get("created_pi", 0) + res.get("updated_pi", 0)) or 0
+		total_cars = res.get("total_cars")
+		if total_cars is None:
+			total_cars = importer.get("total_cars") or 0
+		processed_cars = res.get("processed_cars")
+		if processed_cars is None:
+			processed_cars = res.get("updated_items") or 0
 		time_elapsed_str = res.get("time_elapsed_str", "")
 
 		importer.db_set("import_status", status)
@@ -284,6 +301,8 @@ def publish_import_progress(
 	if docname and update_db:
 		try:
 			db_updates = {}
+			if status:
+				db_updates["import_status"] = status
 			if processed_invoices is not None:
 				db_updates["processed_invoices"] = processed_invoices
 			if total_invoices is not None and total_invoices > 0:
@@ -360,44 +379,155 @@ def detect_excel_format(file_path):
 # MUKECHI FORMAT IMPORT
 # ==========================================
 
-def process_mukechi_import(file_path, docname=None):
+def process_mukechi_import(file_path, docname=None, retry_failed_only=False, prev_failed_records=None):
 	rows = parse_excel_file(file_path)
 	log_lines = []
 	created_count = 0
 	updated_count = 0
 	error_count = 0
 	failed_records = []
+	touched_item_codes = []
 	color_cache = {}
 	start_time = time.time()
 
-	total_rows = len(rows)
-	for idx, row in enumerate(rows, start=2):
-		try:
-			result, item_code = process_row(row, color_cache=color_cache)
-			if result == "created":
-				created_count += 1
-				log_lines.append(f"Row {idx}: Created Item {item_code}")
-			elif result == "updated":
-				updated_count += 1
-				log_lines.append(f"Row {idx}: Updated Item {item_code}")
-		except Exception as e:
-			error_count += 1
-			failed_records.append({"row": idx, "data": row, "error": str(e)})
-			frappe.log_error(title=f"Item Import Error at Row {idx}", message=frappe.get_traceback())
-			log_lines.append(f"Row {idx} Error: {str(e)}")
+	file_total_rows = len(rows)
+	prior_processed = 0
+	total_rows = file_total_rows
 
-		if docname and idx % 10 == 0:
-			publish_import_progress(
+	if retry_failed_only and prev_failed_records:
+		try:
+			parsed_failed = json.loads(prev_failed_records) if isinstance(prev_failed_records, str) else prev_failed_records
+		except Exception:
+			parsed_failed = []
+		retry_rows = []
+		for rec in parsed_failed or []:
+			if isinstance(rec, dict) and isinstance(rec.get("data"), dict):
+				# Keep original Excel row number for logs when present
+				data = dict(rec["data"])
+				data["_excel_row"] = rec.get("row")
+				retry_rows.append(data)
+		if retry_rows:
+			rows = retry_rows
+			if docname:
+				prior_processed = cint(frappe.db.get_value("Item Excel Importer", docname, "processed_cars") or 0)
+				stored_total = cint(frappe.db.get_value("Item Excel Importer", docname, "total_cars") or 0)
+				total_rows = stored_total or file_total_rows
+			log_lines.append(f"Retrying {len(rows)} previously failed Mukechi row(s)...")
+
+	if docname:
+		# On retry keep prior totals; on full run reset processed and set total from file
+		if retry_failed_only:
+			frappe.db.set_value(
+				"Item Excel Importer",
 				docname,
-				processed_cars=idx,
-				total_cars=total_rows,
-				active_step_text=f"Processing Mukechi Row {idx} of {total_rows}...",
-				start_time=start_time,
-				import_type="Mukechi",
+				{
+					"import_status": "In Progress",
+					"total_cars": total_rows,
+					"total_invoices": 0,
+					"processed_invoices": 0,
+				},
+				update_modified=False,
 			)
+		else:
+			frappe.db.set_value(
+				"Item Excel Importer",
+				docname,
+				{
+					"import_status": "In Progress",
+					"total_cars": total_rows,
+					"processed_cars": 0,
+					"total_invoices": 0,
+					"processed_invoices": 0,
+				},
+				update_modified=False,
+			)
+		publish_import_progress(
+			docname,
+			processed_cars=prior_processed,
+			total_cars=total_rows,
+			active_step_text=(
+				f"Retrying {len(rows)} failed Mukechi car(s)..."
+				if retry_failed_only
+				else f"Starting Mukechi import ({total_rows} cars)..."
+			),
+			start_time=start_time,
+			import_type="Mukechi",
+			status="In Progress",
+			update_db=True,
+		)
+
+	# Bulk Mukechi: skip sync Car Costing/JE hooks (they dominate runtime).
+	# Draft Car Costings are created in a follow-up background job.
+	prev_skip = frappe.flags.get("skip_fixed_costing_hooks")
+	frappe.flags.skip_fixed_costing_hooks = True
+	try:
+		work_total = len(rows)
+		for idx, row in enumerate(rows, start=1):
+			excel_row = row.pop("_excel_row", None) if isinstance(row, dict) else None
+			if not excel_row:
+				excel_row = idx + 1  # header is row 1 on full-file runs
+			try:
+				result, item_code = process_row(row, color_cache=color_cache)
+				if item_code:
+					touched_item_codes.append(item_code)
+				if result == "created":
+					created_count += 1
+					log_lines.append(f"Row {excel_row}: Created Item {item_code}")
+				elif result == "updated":
+					updated_count += 1
+					log_lines.append(f"Row {excel_row}: Updated Item {item_code}")
+			except Exception as e:
+				error_count += 1
+				failed_records.append({"row": excel_row, "data": row, "error": str(e)})
+				# Avoid writing a full Error Log per row (very slow on large files)
+				if error_count <= 20 or error_count % 50 == 0:
+					frappe.log_error(title=f"Item Import Error at Row {excel_row}", message=frappe.get_traceback())
+				log_lines.append(f"Row {excel_row} Error: {str(e)}")
+
+			if docname and (idx % 10 == 0 or idx == work_total):
+				publish_import_progress(
+					docname,
+					processed_cars=prior_processed + created_count + updated_count,
+					total_cars=total_rows,
+					active_step_text=f"Processing Mukechi car {idx} of {work_total}...",
+					start_time=start_time,
+					import_type="Mukechi",
+					status="In Progress",
+					update_db=(idx % 25 == 0 or idx == work_total),
+				)
+	finally:
+		frappe.flags.skip_fixed_costing_hooks = prev_skip
+
+	# Defer draft Car Costings so Item import stays fast
+	if touched_item_codes:
+		unique_items = list(dict.fromkeys(touched_item_codes))
+		try:
+			from vsd_jan_integration.vsd_jan_international_customization.utils.mkt_fixed_costing import (
+				enqueue_draft_car_costings,
+			)
+
+			enqueue_draft_car_costings(unique_items, ref_doc=docname)
+			log_lines.append(
+				f"Queued draft Car Costing job for {len(unique_items)} item(s) (deferred for speed)."
+			)
+		except Exception:
+			frappe.log_error(title="Enqueue draft Car Costings failed", message=frappe.get_traceback())
+			log_lines.append("Failed to queue draft Car Costing job — see Error Log")
 
 	time_elapsed = round(time.time() - start_time, 2)
 	time_elapsed_str = format_duration(time_elapsed)
+	processed_cars = prior_processed + created_count + updated_count
+	if docname:
+		publish_import_progress(
+			docname,
+			processed_cars=processed_cars,
+			total_cars=total_rows,
+			active_step_text=f"Mukechi import finished: {processed_cars}/{total_rows} cars",
+			start_time=start_time,
+			import_type="Mukechi",
+			status="Completed" if error_count == 0 else "Completed with Errors",
+			update_db=True,
+		)
 	return {
 		"created": created_count,
 		"updated": updated_count,
@@ -405,6 +535,10 @@ def process_mukechi_import(file_path, docname=None):
 		"log": log_lines,
 		"failed_records": failed_records,
 		"time_elapsed_str": time_elapsed_str,
+		"total_cars": total_rows,
+		"processed_cars": processed_cars,
+		"total_invoices": 0,
+		"processed_invoices": 0,
 	}
 
 
@@ -539,11 +673,38 @@ EXPENSE_FIELDS = [
 def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, auto_submit_jv=False, retry_failed_only=False, prev_failed_records=None, docname=None, import_file_number_format="Invoice No"):
 	start_time = time.time()
 
-	frappe.clear_cache(doctype="Purchase Invoice Item")
-	frappe.clear_cache(doctype="Purchase Invoice")
-	frappe.clear_cache(doctype="Journal Entry")
-	frappe.clear_cache(doctype="Item")
-	frappe.clear_cache(doctype="Import File")
+	# Avoid full doctype cache clears — they stall the first invoice for seconds.
+	# Bulk MKT: skip Fixed Costing doc hooks (PI/IF/Item). Ensure once at end of car update.
+	prev_skip = frappe.flags.get("skip_fixed_costing_hooks")
+	frappe.flags.skip_fixed_costing_hooks = True
+	try:
+		return _process_mkt_statement_inner(
+			file_path=file_path,
+			create_lcv=create_lcv,
+			auto_submit_pi=auto_submit_pi,
+			auto_submit_jv=auto_submit_jv,
+			retry_failed_only=retry_failed_only,
+			prev_failed_records=prev_failed_records,
+			docname=docname,
+			import_file_number_format=import_file_number_format,
+			start_time=start_time,
+		)
+	finally:
+		frappe.flags.skip_fixed_costing_hooks = prev_skip
+
+
+def _process_mkt_statement_inner(
+	file_path,
+	create_lcv=False,
+	auto_submit_pi=False,
+	auto_submit_jv=False,
+	retry_failed_only=False,
+	prev_failed_records=None,
+	docname=None,
+	import_file_number_format="Invoice No",
+	start_time=None,
+):
+	start_time = start_time or time.time()
 
 	invoice_info, container_rows, car_rows = parse_mkt_statement_excel(file_path)
 
@@ -612,11 +773,6 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 
 	if docname:
 		try:
-			importer = frappe.get_doc("Item Excel Importer", docname)
-			importer.db_set("total_invoices", total_invoices)
-			importer.db_set("processed_invoices", 0)
-			importer.db_set("total_cars", total_cars)
-			importer.db_set("processed_cars", 0)
 			est_secs, _ = calculate_estimated_seconds(
 				total_invoices=total_invoices,
 				total_cars=total_cars,
@@ -625,7 +781,34 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 				auto_submit_jv=auto_submit_jv,
 				create_lcv=create_lcv,
 			)
-			importer.db_set("estimated_time", format_duration(est_secs))
+			frappe.db.set_value(
+				"Item Excel Importer",
+				docname,
+				{
+					"import_status": "In Progress",
+					"total_invoices": total_invoices,
+					"processed_invoices": 0,
+					"total_cars": total_cars,
+					"processed_cars": 0,
+					"estimated_time": format_duration(est_secs),
+				},
+				update_modified=False,
+			)
+			publish_import_progress(
+				docname,
+				processed_invoices=0,
+				total_invoices=total_invoices,
+				processed_cars=0,
+				total_cars=total_cars,
+				active_step_text=f"Starting MKT import ({total_invoices} invoices, {total_cars} cars)...",
+				start_time=start_time,
+				import_type="MKT Statement",
+				auto_submit_pi=auto_submit_pi,
+				auto_submit_jv=auto_submit_jv,
+				create_lcv=create_lcv,
+				status="In Progress",
+				update_db=True,
+			)
 		except Exception:
 			pass
 
@@ -651,6 +834,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 		total_cars=total_cars,
 		start_time=start_time,
 		total_invoices=total_invoices,
+		auto_submit_jv=auto_submit_jv,
 	)
 
 
@@ -746,10 +930,11 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	tax_account_cache = {}
 
 	company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
-	company_currency = frappe.db.get_value("Company", company, "default_currency") or "JPY"
+	company_currency = frappe.db.get_value("Company", company, "default_currency") or "TZS"
 	supplier_currency = frappe.db.get_value("Supplier", supplier_name, "default_currency") or "JPY"
 	payable_acc = get_supplier_payable_account(supplier_name, company, supplier_currency)
-	ensure_currency_exchange(supplier_currency, company_currency, 1.0)
+	# Do not seed Currency Exchange at 1.0 — use real rates like a manual Purchase Invoice
+	_ensure_supplier_exchange_rate(supplier_currency, company_currency)
 
 	# Bulk pre-fetch item chassis mappings in 1 query
 	try:
@@ -852,7 +1037,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			continue
 
 		try:
-			# Throttle realtime updates: on 1st, every 5th, and last
+			# Persist progress often enough that a page reload still shows counters
 			if docname and (processed_count == 1 or processed_count % 5 == 0 or processed_count == total_invoices):
 				publish_import_progress(
 					docname,
@@ -866,7 +1051,8 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 					auto_submit_pi=auto_submit_pi,
 					auto_submit_jv=auto_submit_jv,
 					create_lcv=create_lcv,
-					update_db=(processed_count % 25 == 0 or processed_count == total_invoices),
+					status="In Progress",
+					update_db=True,
 				)
 
 			if existing_pi:
@@ -884,8 +1070,9 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				pi_doc.posting_date = pi_doc.bill_date
 				if payable_acc:
 					pi_doc.credit_to = payable_acc
-				if not getattr(pi_doc, "conversion_rate", None):
-					pi_doc.conversion_rate = 1.0
+				pi_doc.conversion_rate = _pi_conversion_rate(
+					pi_doc.currency, company_currency, pi_doc.posting_date
+				)
 				pi_doc.update_stock = 1
 
 			if has_pi_custom_bl_sw:
@@ -1087,13 +1274,14 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 # SCHEDULER / WORKER 2: CARS & ITEMS UPDATER
 # ==========================================
 
-def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map, total_cars, start_time, total_invoices=0):
+def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map, total_cars, start_time, total_invoices=0, auto_submit_jv=False):
 	updated_items = 0
 	error_count = 0
 	logs = []
 	failed_records = []
 	chassis_cache = {}
 	color_cache = {}
+	touched_item_codes = []
 
 	# Bulk pre-fetch item mappings into chassis_cache in 1 query
 	try:
@@ -1139,6 +1327,8 @@ def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map
 
 		info = invoice_info.get(normalize_inv_no(inv_no), {}) if inv_no else {}
 		bl_sw = car.get("bl_sw") or info.get("bl_sw") or ""
+		# When BL/SW is blank (common), stamp invoice no on Item.custom_bl so IFCV can match
+		bl_for_item = (bl_sw or "").strip() or (normalize_inv_no(inv_no) if inv_no else "")
 
 		item_name = find_item_by_chassis(chassis_no, cache=chassis_cache)
 		if not item_name:
@@ -1155,7 +1345,9 @@ def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map
 		if car.get("color") and has_custom_color:
 			color_val = ensure_item_color(car["color"], cache=color_cache)
 
-		batch_updates.append((item_name, car_price, bl_sw, car_container_no, color_val))
+		batch_updates.append((item_name, car_price, bl_for_item, car_container_no, color_val))
+		if item_name not in touched_item_codes:
+			touched_item_codes.append(item_name)
 
 		if docname and (processed_count == 1 or processed_count % 50 == 0 or processed_count == total_cars):
 			publish_import_progress(
@@ -1199,11 +1391,44 @@ def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map
 
 			frappe.db.commit()
 
+	# Do NOT run Fixed Costing inline — 2k cars × JE/CC was locking the DB and
+	# leaving the import job hung at 2150/2150. Defer to long queue.
+	fixed_summary = {"car_costings": [], "journal_entries": [], "errors": [], "queued": 0}
+	if touched_item_codes:
+		try:
+			from vsd_jan_integration.vsd_jan_international_customization.utils.mkt_fixed_costing import (
+				enqueue_fixed_costing_for_items,
+			)
+
+			enqueue_fixed_costing_for_items(touched_item_codes, ref_doc=docname, auto_submit_jv=False)
+			fixed_summary["queued"] = len(touched_item_codes)
+			logs.append(
+				f"Fixed Costing queued in background for {len(touched_item_codes)} item(s) "
+				f"(does not block import completion)."
+			)
+			if docname:
+				publish_import_progress(
+					docname,
+					processed_invoices=total_invoices,
+					total_invoices=total_invoices,
+					processed_cars=total_cars,
+					total_cars=total_cars,
+					active_step_text=f"Queued Fixed Costing for {len(touched_item_codes)} cars...",
+					start_time=start_time,
+					import_type="MKT Statement",
+					status="In Progress",
+					update_db=True,
+				)
+		except Exception:
+			frappe.log_error(title="MKT Fixed Costing enqueue", message=frappe.get_traceback())
+			logs.append("Fixed Costing enqueue failed — see Error Log")
+
 	return {
 		"updated_items": updated_items,
 		"errors": error_count,
 		"logs": logs,
 		"failed_records": failed_records,
+		"fixed_costing": fixed_summary,
 	}
 
 
@@ -1553,6 +1778,36 @@ def update_doc_import_file_link(doctype, docname, import_file_name):
 				frappe.db.set_value(doctype, docname, fn, import_file_name, update_modified=False)
 		except Exception:
 			pass
+
+	# db.set_value skips doc_events — ensure Fixed expected when PI gets Import File this way
+	# (skipped during bulk MKT via skip_fixed_costing_hooks)
+	if doctype == "Purchase Invoice" and not frappe.flags.get("skip_fixed_costing_hooks"):
+		try:
+			from vsd_jan_integration.vsd_jan_international_customization.utils.mkt_fixed_costing import (
+				ensure_fixed_expected_for_item,
+				is_vehicle_item,
+			)
+
+			item_codes = frappe.get_all(
+				"Purchase Invoice Item",
+				filters={"parent": docname},
+				pluck="item_code",
+			)
+			for item_code in item_codes:
+				if item_code and is_vehicle_item(item_code):
+					ensure_fixed_expected_for_item(
+						item_code,
+						import_file=import_file_name,
+						prefer_source=f"Purchase Invoice {docname} (db link)",
+						create_car_costing=True,
+						create_journal_entry=True,
+						require_import_file_for_je=True,
+					)
+		except Exception:
+			frappe.log_error(
+				title=f"Fixed Costing after PI import_file link {docname}",
+				message=frappe.get_traceback(),
+			)
 
 
 def create_or_update_import_file(
@@ -2096,6 +2351,51 @@ def ensure_currency_exchange(from_currency, to_currency, rate=1.0):
 	_currency_exchange_cache.add(key)
 
 
+def _ensure_supplier_exchange_rate(from_currency, to_currency):
+	"""Ensure a buying exchange exists using ERPNext get_exchange_rate (never force 1.0)."""
+	if not from_currency or not to_currency or from_currency == to_currency:
+		return
+	try:
+		from erpnext.setup.utils import get_exchange_rate
+
+		rate = flt(get_exchange_rate(from_currency, to_currency, frappe.utils.today(), "for_buying"))
+	except Exception:
+		rate = 0
+	if not rate or rate == 1.0:
+		# Prefer an existing non-1 rate; only create if none exists
+		existing = frappe.db.get_value(
+			"Currency Exchange",
+			{"from_currency": from_currency, "to_currency": to_currency, "for_buying": 1},
+			["name", "exchange_rate"],
+			as_dict=True,
+		)
+		if existing and flt(existing.exchange_rate) and flt(existing.exchange_rate) != 1.0:
+			return
+		# Leave missing — PI will still call get_exchange_rate; avoid poisoning with 1.0
+		return
+	ensure_currency_exchange(from_currency, to_currency, rate)
+
+
+def _pi_conversion_rate(currency, company_currency, posting_date=None):
+	"""Same as manual Purchase Invoice: Currency Exchange for_buying on posting date."""
+	if not currency or not company_currency or currency == company_currency:
+		return 1.0
+	try:
+		from erpnext.setup.utils import get_exchange_rate
+
+		rate = flt(
+			get_exchange_rate(
+				currency,
+				company_currency,
+				posting_date or frappe.utils.today(),
+				"for_buying",
+			)
+		)
+	except Exception:
+		rate = 0
+	return rate or 1.0
+
+
 
 
 # ==========================================
@@ -2162,6 +2462,151 @@ def format_date(val):
 		except ValueError:
 			continue
 	return None
+
+
+@frappe.whitelist()
+def undo_import(docname):
+	"""Administrator-only: delete Items created by this import and reset to Pending."""
+	if frappe.session.user != "Administrator":
+		frappe.throw(_("Only Administrator can undo an import."), frappe.PermissionError)
+
+	importer = frappe.get_doc("Item Excel Importer", docname)
+	if importer.import_status in ("Queued", "In Progress"):
+		_best_effort_cancel_import_jobs(docname)
+
+	created_items = _parse_created_items_from_log(importer.get("import_log") or "")
+	deleted_items = 0
+	deleted_cc = 0
+	deleted_je = 0
+	errors = []
+
+	prev_skip = frappe.flags.get("skip_fixed_costing_hooks")
+	frappe.flags.skip_fixed_costing_hooks = True
+	try:
+		for idx, item_code in enumerate(created_items, start=1):
+			try:
+				cc_n, je_n = _delete_item_import_artifacts(item_code)
+				deleted_cc += cc_n
+				deleted_je += je_n
+				if frappe.db.exists("Item", item_code):
+					frappe.delete_doc("Item", item_code, force=1, ignore_permissions=True)
+					deleted_items += 1
+				if idx % 40 == 0:
+					frappe.db.commit()
+			except Exception as exc:
+				errors.append(f"{item_code}: {exc}")
+				if len(errors) <= 25:
+					frappe.log_error(title=f"Undo Import delete failed: {item_code}", message=frappe.get_traceback())
+	finally:
+		frappe.flags.skip_fixed_costing_hooks = prev_skip
+
+	frappe.db.set_value(
+		"Item Excel Importer",
+		docname,
+		{
+			"import_status": "Pending",
+			"import_log": "",
+			"failed_records": "[]",
+			"processed_cars": 0,
+			"processed_invoices": 0,
+			"total_cars": 0,
+			"total_invoices": 0,
+			"estimated_time": "",
+		},
+		update_modified=True,
+	)
+	frappe.db.commit()
+
+	publish_import_progress(
+		docname,
+		processed_invoices=0,
+		total_invoices=0,
+		processed_cars=0,
+		total_cars=0,
+		active_step_text=_("Import undone. Status reset to Pending."),
+		status="Pending",
+		update_db=True,
+	)
+
+	summary = {
+		"deleted_items": deleted_items,
+		"deleted_car_costings": deleted_cc,
+		"deleted_journal_entries": deleted_je,
+		"parsed_created_items": len(created_items),
+		"errors": errors[:30],
+		"status": "Pending",
+		"message": _(
+			"Undo complete. Deleted {0} Item(s), {1} Car Costing(s), {2} JE(s). Status is Pending."
+		).format(deleted_items, deleted_cc, deleted_je),
+	}
+	return summary
+
+
+def _parse_created_items_from_log(import_log):
+	"""Extract item codes from 'Created Item <code>' lines (Mukechi / similar)."""
+	import re
+
+	if not import_log:
+		return []
+	# Prefer unique order-preserving list
+	found = []
+	seen = set()
+	for match in re.finditer(r"Created Item\s+(.+)$", import_log, flags=re.MULTILINE):
+		code = (match.group(1) or "").strip()
+		if code and code not in seen:
+			seen.add(code)
+			found.append(code)
+	return found
+
+
+def _delete_item_import_artifacts(item_code):
+	"""Delete draft Car Costings + Fixed Costing JEs for an Item. Returns (cc_count, je_count)."""
+	cc_count = 0
+	je_count = 0
+
+	for cc_name in frappe.get_all("Car Costing", filters={"item": item_code}, pluck="name"):
+		cc = frappe.get_doc("Car Costing", cc_name)
+		if cc.docstatus == 1:
+			cc.cancel()
+		frappe.delete_doc("Car Costing", cc_name, force=1, ignore_permissions=True)
+		cc_count += 1
+
+	cheque = f"FIXED|{item_code}"[:140]
+	for je_name in frappe.get_all("Journal Entry", filters={"cheque_no": cheque}, pluck="name"):
+		je = frappe.get_doc("Journal Entry", je_name)
+		if je.docstatus == 1:
+			je.cancel()
+		frappe.delete_doc("Journal Entry", je_name, force=1, ignore_permissions=True)
+		je_count += 1
+
+	return cc_count, je_count
+
+
+def _best_effort_cancel_import_jobs(docname):
+	"""Try to stop queued/started import jobs for this importer (best effort)."""
+	try:
+		from frappe.utils.background_jobs import get_queues
+
+		for queue in get_queues():
+			for job in queue.jobs:
+				kwargs = (job.kwargs or {}).get("kwargs") or job.kwargs or {}
+				if kwargs.get("docname") == docname:
+					job.cancel()
+			# started jobs
+			registry = getattr(queue, "started_job_registry", None)
+			if registry:
+				for job_id in registry.get_job_ids():
+					job = queue.fetch_job(job_id)
+					if not job:
+						continue
+					kwargs = (job.kwargs or {}).get("kwargs") or job.kwargs or {}
+					if kwargs.get("docname") == docname:
+						try:
+							job.cancel()
+						except Exception:
+							pass
+	except Exception:
+		frappe.log_error(title="Undo Import: cancel jobs", message=frappe.get_traceback())
 
 
 @frappe.whitelist()

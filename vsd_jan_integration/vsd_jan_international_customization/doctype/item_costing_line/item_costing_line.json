@@ -1,0 +1,109 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "costing_head",
+  "costing_name",
+  "entry_mode",
+  "currency",
+  "column_break_1",
+  "projected_amount",
+  "actual_amount",
+  "allocation_scope",
+  "account",
+  "costing_code",
+  "is_manual_override",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "costing_head",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Costing",
+   "options": "Costing",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "costing_head.costing_name",
+   "fieldname": "costing_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Name",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "costing_head.entry_mode",
+   "fieldname": "entry_mode",
+   "fieldtype": "Data",
+   "label": "Mode",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "costing_head.currency",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "projected_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Expected",
+   "options": "currency"
+  },
+  {
+   "default": "0",
+   "fieldname": "actual_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Actual",
+   "options": "currency"
+  },
+  {
+   "fetch_from": "costing_head.allocation_scope",
+   "fieldname": "allocation_scope",
+   "fieldtype": "Data",
+   "label": "Allocation Scope",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "costing_head.account",
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "label": "Account",
+   "options": "Account",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "costing_head.costing_code",
+   "fieldname": "costing_code",
+   "fieldtype": "Data",
+   "label": "Code",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_manual_override",
+   "fieldtype": "Check",
+   "label": "Manual Override"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "istable": 1,
+ "module": "VSD Jan International Customization",
+ "name": "Item Costing Line",
+ "permissions": []
+}

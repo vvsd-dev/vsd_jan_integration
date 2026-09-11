@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Car Costing &amp; Import File Cost Voucher — How It Works</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+    @bottom-center {
+      content: "Jan International · Car Costing Guide · Page " counter(page);
+      font-size: 9pt;
+      color: #667;
+    }
+  }
+  :root {
+    --ink: #1a2332;
+    --muted: #5a6577;
+    --line: #d8dee9;
+    --bg: #f6f8fb;
+    --card: #ffffff;
+    --accent: #0b6e4f;
+    --accent2: #1b4f72;
+    --warn: #9a6700;
+    --tz: #0e7490;
+    --jp: #b45309;
+    --bl: #4338ca;
+    --veh: #be123c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    font-size: 10.5pt;
+    line-height: 1.45;
+    margin: 0;
+  }
+  h1 {
+    font-size: 22pt;
+    margin: 0 0 6pt;
+    color: var(--accent2);
+    letter-spacing: -0.02em;
+  }
+  h2 {
+    font-size: 14pt;
+    margin: 22pt 0 8pt;
+    padding-bottom: 4pt;
+    border-bottom: 2px solid var(--accent);
+    color: var(--accent2);
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 11.5pt;
+    margin: 14pt 0 6pt;
+    color: var(--ink);
+    page-break-after: avoid;
+  }
+  p { margin: 0 0 8pt; }
+  .subtitle { color: var(--muted); font-size: 11pt; margin-bottom: 14pt; }
+  .cover {
+    border: 1px solid var(--line);
+    background: linear-gradient(135deg, #eef6f3 0%, #e8eef7 100%);
+    padding: 22pt 20pt;
+    border-radius: 8pt;
+    margin-bottom: 16pt;
+  }
+  .meta {
+    display: flex;
+    gap: 18pt;
+    flex-wrap: wrap;
+    font-size: 9.5pt;
+    color: var(--muted);
+    margin-top: 10pt;
+  }
+  .meta strong { color: var(--ink); }
+  .toc {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    padding: 12pt 16pt;
+    border-radius: 6pt;
+    margin-bottom: 12pt;
+  }
+  .toc ol { margin: 4pt 0 0 16pt; padding: 0; }
+  .toc li { margin: 3pt 0; }
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: #f0faf6;
+    padding: 8pt 12pt;
+    margin: 10pt 0;
+    border-radius: 0 6pt 6pt 0;
+  }
+  .callout.warn {
+    border-left-color: var(--warn);
+    background: #fff8e8;
+  }
+  .callout.blue {
+    border-left-color: var(--accent2);
+    background: #eef4fb;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8pt 0 12pt;
+    font-size: 9.5pt;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 5pt 7pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg);
+    font-weight: 600;
+  }
+  .badge {
+    display: inline-block;
+    padding: 1pt 6pt;
+    border-radius: 999pt;
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: #fff;
+  }
+  .badge.bl { background: var(--bl); }
+  .badge.veh { background: var(--veh); }
+  .badge.tz { background: var(--tz); }
+  .badge.jp { background: var(--jp); }
+  .badge.fix { background: #64748b; }
+  .badge.var { background: #0f766e; }
+  .badge.formula { background: #7c3aed; }
+  .flow {
+    width: 100%;
+    margin: 10pt 0 14pt;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10pt;
+    margin: 8pt 0 12pt;
+  }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 6pt;
+    padding: 10pt;
+    background: var(--card);
+    page-break-inside: avoid;
+  }
+  .card h4 {
+    margin: 0 0 6pt;
+    font-size: 10.5pt;
+  }
+  .step {
+    counter-increment: step;
+    border: 1px solid var(--line);
+    border-radius: 6pt;
+    padding: 10pt 12pt 10pt 42pt;
+    margin: 8pt 0;
+    position: relative;
+    page-break-inside: avoid;
+    background: #fff;
+  }
+  .step::before {
+    content: counter(step);
+    position: absolute;
+    left: 10pt;
+    top: 10pt;
+    width: 22pt;
+    height: 22pt;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    font-size: 11pt;
+    text-align: center;
+    line-height: 22pt;
+  }
+  .steps { counter-reset: step; }
+  img.shot {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 4pt;
+    margin: 6pt 0 10pt;
+  }
+  .caption {
+    font-size: 8.5pt;
+    color: var(--muted);
+    margin: -4pt 0 12pt;
+    font-style: italic;
+  }
+  ul { margin: 4pt 0 8pt 16pt; padding: 0; }
+  li { margin: 2pt 0; }
+  code {
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 9pt;
+    background: var(--bg);
+    padding: 0 3pt;
+    border-radius: 3pt;
+  }
+  .small { font-size: 9pt; color: var(--muted); }
+  .pagebreak { page-break-before: always; }
+  .example-box {
+    background: #f8fafc;
+    border: 1px dashed #94a3b8;
+    padding: 10pt;
+    border-radius: 6pt;
+    margin: 8pt 0;
+    page-break-inside: avoid;
+  }
+  .example-box strong.label {
+    display: block;
+    color: var(--accent2);
+    margin-bottom: 4pt;
+    font-size: 9.5pt;
+  }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Car Costing &amp; Import File Cost Voucher</h1>
+  <p class="subtitle">A practical guide to how projected car costs and actual BL expenses work together in ERPNext (Jan International).</p>
+  <div class="meta">
+    <div><strong>Site:</strong> dev15-jan.vvsdtz.com</div>
+    <div><strong>Focus Import File:</strong> N.TAN039/26MSC</div>
+    <div><strong>BL:</strong> MEDUW3445865 (7 cars)</div>
+    <div><strong>Based on:</strong> 1 BL COST.xlsx · NEW COST FILE</div>
+    <div><strong>Date:</strong> 5 Sep 2026</div>
+  </div>
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li>Big picture — what problem we solve</li>
+    <li>The two DocTypes (and when to use each)</li>
+    <li>Costing — the rule book</li>
+    <li>Expected vs Actual (from your expense list)</li>
+    <li>Car Costing — projected estimates per car</li>
+    <li>Import File Cost Voucher (IFCV) — actuals from JE/PI</li>
+    <li>How money is split: Equal / M3 / Manual</li>
+    <li>End-to-end walkthrough with N.TAN039/26MSC</li>
+    <li>What to click in Desk (user checklist)</li>
+    <li>What is finished vs what comes next</li>
+  </ol>
+</div>
+
+<!-- ========== 1 ========== -->
+<h2>1. Big picture — what problem we solve</h2>
+<p>
+Shipping cars from Japan creates many cost lines: duty, wharfage, shipping, inspection, service, etc.
+Some costs are known early as <strong>estimates</strong>; some arrive later as <strong>posted accounting entries</strong> (Journal Entry / Purchase Invoice).
+</p>
+<p>
+The system separates those two moments cleanly:
+</p>
+
+<svg class="flow" viewBox="0 0 740 210" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect x="10" y="20" width="130" height="54" rx="8" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="75" y="42" text-anchor="middle" font-size="11" font-weight="700" fill="#0c4a6e">Excel / Import</text>
+  <text x="75" y="58" text-anchor="middle" font-size="9" fill="#0369a1">Cars + M3 + YEN</text>
+
+  <line x1="140" y1="47" x2="175" y2="47" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="175" y="20" width="140" height="54" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="245" y="42" text-anchor="middle" font-size="11" font-weight="700" fill="#14532d">Import File</text>
+  <text x="245" y="58" text-anchor="middle" font-size="9" fill="#166534">N.TAN039/26MSC</text>
+
+  <line x1="315" y1="47" x2="350" y2="47" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="350" y="8" width="160" height="78" rx="8" fill="#fef3c7" stroke="#d97706"/>
+  <text x="430" y="32" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">Car Costing</text>
+  <text x="430" y="48" text-anchor="middle" font-size="9" fill="#a16207">PROJECTED / estimate</text>
+  <text x="430" y="64" text-anchor="middle" font-size="9" fill="#a16207">one document per car</text>
+
+  <line x1="430" y1="86" x2="430" y2="118" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="350" y="120" width="160" height="70" rx="8" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="430" y="145" text-anchor="middle" font-size="11" font-weight="700" fill="#5b21b6">IFCV</text>
+  <text x="430" y="161" text-anchor="middle" font-size="9" fill="#6d28d9">ACTUAL from JE / PI</text>
+  <text x="430" y="177" text-anchor="middle" font-size="9" fill="#6d28d9">split onto cars</text>
+
+  <line x1="510" y1="47" x2="560" y2="47" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="510" y1="155" x2="560" y2="155" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="560" y1="47" x2="560" y2="155" stroke="#475569" stroke-width="2"/>
+
+  <rect x="570" y="70" width="155" height="70" rx="8" fill="#fce7f3" stroke="#db2777"/>
+  <text x="647" y="98" text-anchor="middle" font-size="11" font-weight="700" fill="#9d174d">Updated Car Costing</text>
+  <text x="647" y="116" text-anchor="middle" font-size="9" fill="#be185d">projected ← actual share</text>
+</svg>
+<p class="caption">Figure 1 — High-level flow: estimate first on Car Costing, then push real posted expenses via IFCV.</p>
+
+<div class="callout">
+  <strong>Remember:</strong> Car Costing = “what we expect this car to cost”. IFCV = “what was actually posted on the Import File, and how we share it across the cars”.
+</div>
+
+<!-- ========== 2 ========== -->
+<h2>2. The two DocTypes (and when to use each)</h2>
+<div class="grid-2">
+  <div class="card">
+    <h4>Car Costing</h4>
+    <ul>
+      <li>One document <strong>per car (Item)</strong></li>
+      <li>Linked to an <strong>Import File</strong></li>
+      <li>TZ lines (TZS) + Japan lines (USD)</li>
+      <li>Header: M3, YEN, exchange rates</li>
+      <li>Formulas (e.g. Wharfage = Duty × 7%)</li>
+      <li>Used for <strong>projected</strong> costing</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Import File Cost Voucher (IFCV)</h4>
+    <ul>
+      <li>One document <strong>per Import File</strong></li>
+      <li>Loads all cars on that BL / invoice</li>
+      <li>Loads posted JE/PI expense lines</li>
+      <li>Distributes amounts to cars</li>
+      <li>On submit, can update Car Costings</li>
+      <li>Used for <strong>actual</strong> expense allocation</li>
+    </ul>
+  </div>
+</div>
+
+<table>
+  <tr>
+    <th>Question</th>
+    <th>Use</th>
+  </tr>
+  <tr>
+    <td>I know duty / M3 / shipping estimate for this car</td>
+    <td><strong>Car Costing</strong></td>
+  </tr>
+  <tr>
+    <td>Accounts posted a JV for shipping / TPA / inspection on this Import File</td>
+    <td><strong>IFCV</strong></td>
+  </tr>
+  <tr>
+    <td>One invoice for the whole BL must be split to 7 cars</td>
+    <td><strong>IFCV</strong> (By BL Equal or By BL M3)</td>
+  </tr>
+  <tr>
+    <td>Each car has its own journal (e.g. TRA Duty per chassis)</td>
+    <td><strong>IFCV</strong> (By Vehicle Manual)</td>
+  </tr>
+</table>
+
+<!-- ========== 3 ========== -->
+<div class="pagebreak"></div>
+<h2>3. Costing — the rule book</h2>
+<p>
+Every cost line (TRA Duty, Shipping Line, Inspection…) is a <strong>Costing</strong> master.
+It tells the system: how to enter it, how to calculate it, which GL account it maps to, and whether actuals arrive By Vehicle or By BL.
+</p>
+
+<svg class="flow" viewBox="0 0 740 150" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <rect x="20" y="30" width="160" height="90" rx="8" fill="#ecfdf5" stroke="#059669"/>
+  <text x="100" y="55" text-anchor="middle" font-size="12" font-weight="700" fill="#065f46">Fixed</text>
+  <text x="100" y="75" text-anchor="middle" font-size="9" fill="#047857">Default amount</text>
+  <text x="100" y="92" text-anchor="middle" font-size="9" fill="#047857">e.g. Ex-Bond 139,314</text>
+  <text x="100" y="108" text-anchor="middle" font-size="9" fill="#047857">Service 50,000</text>
+
+  <rect x="210" y="30" width="160" height="90" rx="8" fill="#eff6ff" stroke="#2563eb"/>
+  <text x="290" y="55" text-anchor="middle" font-size="12" font-weight="700" fill="#1e3a8a">Variable</text>
+  <text x="290" y="75" text-anchor="middle" font-size="9" fill="#1d4ed8">User types amount</text>
+  <text x="290" y="92" text-anchor="middle" font-size="9" fill="#1d4ed8">e.g. TRA Duty</text>
+  <text x="290" y="108" text-anchor="middle" font-size="9" fill="#1d4ed8">ICD / Shipping share</text>
+
+  <rect x="400" y="30" width="160" height="90" rx="8" fill="#f5f3ff" stroke="#7c3aed"/>
+  <text x="480" y="55" text-anchor="middle" font-size="12" font-weight="700" fill="#5b21b6">Formula</text>
+  <text x="480" y="75" text-anchor="middle" font-size="9" fill="#6d28d9">Calculated</text>
+  <text x="480" y="92" text-anchor="middle" font-size="9" fill="#6d28d9">Wharfage = Duty × 7%</text>
+  <text x="480" y="108" text-anchor="middle" font-size="9" fill="#6d28d9">(Excel NEW COST FILE)</text>
+
+  <rect x="590" y="30" width="130" height="90" rx="8" fill="#fff7ed" stroke="#ea580c"/>
+  <text x="655" y="55" text-anchor="middle" font-size="12" font-weight="700" fill="#9a3412">Account</text>
+  <text x="655" y="75" text-anchor="middle" font-size="9" fill="#c2410c">GL link for IFCV</text>
+  <text x="655" y="92" text-anchor="middle" font-size="9" fill="#c2410c">maps JE/PI lines</text>
+  <text x="655" y="108" text-anchor="middle" font-size="9" fill="#c2410c">to this head</text>
+</svg>
+<p class="caption">Figure 2 — Costing entry modes.</p>
+
+<table>
+  <tr>
+    <th>Costing</th>
+    <th>Region</th>
+    <th>Mode</th>
+    <th>Actual scope</th>
+    <th>Notes</th>
+  </tr>
+  <tr><td>TRA Duty</td><td><span class="badge tz">TZ</span></td><td><span class="badge var">Variable</span></td><td><span class="badge veh">By Vehicle</span></td><td>Per car</td></tr>
+  <tr><td>Clearing Container</td><td><span class="badge tz">TZ</span></td><td><span class="badge fix">Fixed</span></td><td><span class="badge bl">By BL</span></td><td>Expected by vehicle; posted as BL total</td></tr>
+  <tr><td>Ex-Bond / Service / Driver / Bond Ins.</td><td><span class="badge tz">TZ</span></td><td><span class="badge fix">Fixed</span></td><td><span class="badge veh">By Vehicle</span></td><td>Per car actuals</td></tr>
+  <tr><td>Wharfage</td><td><span class="badge tz">TZ</span></td><td><span class="badge formula">Formula</span></td><td><span class="badge bl">By BL</span></td><td>Duty × 7% (Excel)</td></tr>
+  <tr><td>TPA</td><td><span class="badge tz">TZ</span></td><td><span class="badge var">Variable</span></td><td><span class="badge bl">By BL</span></td><td>BL total → split</td></tr>
+  <tr><td>Japan Cost</td><td><span class="badge jp">JP</span></td><td><span class="badge fix">Fixed</span></td><td><span class="badge veh">By Vehicle</span></td><td>Maps to <code>JPN Expense JPY</code></td></tr>
+  <tr><td>Inspection</td><td><span class="badge jp">JP</span></td><td><span class="badge fix">Fixed</span></td><td><span class="badge veh">By Vehicle</span></td><td>Maps to <code>Inspection JPY</code></td></tr>
+  <tr><td>ICD / Shipping Line</td><td><span class="badge jp">JP</span></td><td><span class="badge var">Variable</span></td><td><span class="badge bl">By BL</span></td><td>Usually split by M3</td></tr>
+</table>
+
+<!-- ========== 4 ========== -->
+<h2>4. Expected vs Actual (from your expense list)</h2>
+<p>
+Your spreadsheet separates <strong>Expected</strong> (how Car Costing thinks) from <strong>Actual</strong> (how accounting posts).
+That mismatch is exactly why IFCV exists.
+</p>
+<img class="shot" src="assets/expense-list-rules.png" alt="Expense list Expected vs Actual rules" />
+<p class="caption">Figure 3 — Your expense list: yellow = Fixed, blue = Variable/BL formulas, green = Inspection (MKT), orange = repairs.</p>
+
+<div class="callout blue">
+  <strong>Key idea:</strong> Clearing Container / Wharfage / TPA / ICD / Shipping are often estimated per car, but the <em>actual</em> JV/invoice is posted once for the whole BL. IFCV takes that BL total and divides it back to cars (Equal or M3).
+</div>
+
+<svg class="flow" viewBox="0 0 740 175" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <rect x="30" y="20" width="300" height="140" rx="10" fill="#eef2ff" stroke="#4338ca"/>
+  <text x="180" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#312e81">Actual = By BL</text>
+  <text x="180" y="72" text-anchor="middle" font-size="10" fill="#3730a3">One JE / PI for the Import File</text>
+  <text x="180" y="92" text-anchor="middle" font-size="10" fill="#3730a3">→ IFCV splits to all cars</text>
+  <text x="180" y="118" text-anchor="middle" font-size="9.5" fill="#4338ca">Clearing · Wharfage · TPA</text>
+  <text x="180" y="136" text-anchor="middle" font-size="9.5" fill="#4338ca">ICD · Shipping Line</text>
+
+  <rect x="410" y="20" width="300" height="140" rx="10" fill="#fff1f2" stroke="#be123c"/>
+  <text x="560" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#9f1239">Actual = By Vehicle</text>
+  <text x="560" y="72" text-anchor="middle" font-size="10" fill="#be123c">One JE per car (or tagged remark)</text>
+  <text x="560" y="92" text-anchor="middle" font-size="10" fill="#be123c">→ IFCV maps to that car</text>
+  <text x="560" y="118" text-anchor="middle" font-size="9.5" fill="#e11d48">TRA Duty · Ex-Bond · Service</text>
+  <text x="560" y="136" text-anchor="middle" font-size="9.5" fill="#e11d48">Driver · Bond · Inspection · Japan Cost</text>
+</svg>
+<p class="caption">Figure 4 — Two actual posting styles that IFCV must handle.</p>
+
+<!-- ========== 5 ========== -->
+<div class="pagebreak"></div>
+<h2>5. Car Costing — projected estimates per car</h2>
+<p>
+For Import File <code>N.TAN039/26MSC</code> we created <strong>7 draft Car Costings</strong> (one per chassis), filled from Excel.
+</p>
+
+<h3>What you fill on the form</h3>
+<table>
+  <tr><th>Field / section</th><th>Meaning</th></tr>
+  <tr><td>Item + Import File</td><td>Which car, which shipment</td></tr>
+  <tr><td>M3</td><td>Vehicle volume (header field — not a cost line)</td></tr>
+  <tr><td>YEN + Yen exchange rate</td><td>Purchase price in JPY → converted to USD</td></tr>
+  <tr><td>Exchange rate (TZS/USD)</td><td>Usually 2700 in the Excel sample</td></tr>
+  <tr><td>Tanzania lines</td><td>Duty, clearing, service, wharfage, TPA…</td></tr>
+  <tr><td>Japan lines</td><td>Japan Cost, Inspection, ICD, Shipping</td></tr>
+  <tr><td>Summary</td><td>TOTAL EXP TSH/USD, TOTAL COST USD, COST</td></tr>
+</table>
+
+<h3>Excel calculation chain (what the engine copies)</h3>
+<svg class="flow" viewBox="0 0 740 250" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="a2" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L5,3 L0,6 Z" fill="#334155"/></marker>
+  </defs>
+  <rect x="20" y="20" width="150" height="40" rx="6" fill="#cffafe" stroke="#0891b2"/>
+  <text x="95" y="45" text-anchor="middle" font-size="10" font-weight="600">TRA Duty</text>
+  <line x1="170" y1="40" x2="205" y2="40" stroke="#334155" stroke-width="1.5" marker-end="url(#a2)"/>
+  <rect x="205" y="20" width="150" height="40" rx="6" fill="#ddd6fe" stroke="#7c3aed"/>
+  <text x="280" y="45" text-anchor="middle" font-size="10" font-weight="600">Wharfage = Duty×7%</text>
+
+  <rect x="20" y="85" width="335" height="40" rx="6" fill="#e2e8f0" stroke="#64748b"/>
+  <text x="187" y="110" text-anchor="middle" font-size="10" font-weight="600">TOTAL EXP TSH = TZ lines WITHOUT duty</text>
+
+  <line x1="355" y1="105" x2="395" y2="105" stroke="#334155" stroke-width="1.5" marker-end="url(#a2)"/>
+  <rect x="395" y="85" width="150" height="40" rx="6" fill="#fef9c3" stroke="#ca8a04"/>
+  <text x="470" y="110" text-anchor="middle" font-size="10" font-weight="600">TSH → USD</text>
+
+  <rect x="20" y="150" width="525" height="40" rx="6" fill="#ffedd5" stroke="#ea580c"/>
+  <text x="282" y="175" text-anchor="middle" font-size="10" font-weight="600">TOTAL EXP USD = TSH→USD + Japan Cost + Inspection + ICD + Shipping</text>
+
+  <rect x="20" y="205" width="525" height="40" rx="6" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="282" y="230" text-anchor="middle" font-size="10" font-weight="600">TOTAL COST USD = Duty USD + TOTAL EXP USD + YEN in USD → COST = × exchange</text>
+
+  <rect x="565" y="150" width="155" height="95" rx="8" fill="#fce7f3" stroke="#db2777"/>
+  <text x="642" y="185" text-anchor="middle" font-size="11" font-weight="700" fill="#9d174d">Landed COST</text>
+  <text x="642" y="205" text-anchor="middle" font-size="9" fill="#be185d">matches Excel</text>
+  <text x="642" y="221" text-anchor="middle" font-size="9" fill="#be185d">TOTAL COST USD × FX</text>
+</svg>
+<p class="caption">Figure 5 — Formula chain from 1 BL COST.xlsx (NEW COST FILE). Note: Excel COST column also adds City Levy + VAT from selling price; our projected COST is landed cost only.</p>
+
+<div class="example-box">
+  <strong class="label">Example — Toyota Noah ZRR70-0198971</strong>
+  M3 14.733 · Duty 9,600,000 · Wharfage 672,000 · TPA 141,176 · ICD 191.529 · Shipping 1,384.902 · YEN 217,000<br/>
+  → Landed COST <strong>TZS 19,999,903.70</strong> (exact match to Excel TOTAL COST USD × 2700).
+</div>
+
+<!-- ========== 6 ========== -->
+<h2>6. Import File Cost Voucher (IFCV) — actuals from JE/PI</h2>
+<p>
+When you select an Import File, IFCV automatically loads:
+</p>
+<ol>
+  <li><strong>Vehicles</strong> — Items whose <code>custom_bl</code> matches Import File BL (else supplier invoice no).</li>
+  <li><strong>Expenses</strong> — Submitted Journal Entry debit lines + Purchase Invoice item amounts for that Import File.</li>
+</ol>
+
+<div class="callout warn">
+  <strong>Stock In Hand is ignored.</strong> Those PI lines are the car purchase (YEN stock), not distributeable landed expenses.
+</div>
+
+<svg class="flow" viewBox="0 0 740 200" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <rect x="20" y="30" width="140" height="55" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="90" y="52" text-anchor="middle" font-size="10" font-weight="700">Journal Entry</text>
+  <text x="90" y="68" text-anchor="middle" font-size="9">debit lines</text>
+
+  <rect x="20" y="110" width="140" height="55" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="90" y="132" text-anchor="middle" font-size="10" font-weight="700">Purchase Invoice</text>
+  <text x="90" y="148" text-anchor="middle" font-size="9">item amounts</text>
+
+  <line x1="160" y1="57" x2="210" y2="100" stroke="#475569" stroke-width="1.5"/>
+  <line x1="160" y1="137" x2="210" y2="100" stroke="#475569" stroke-width="1.5"/>
+
+  <rect x="210" y="70" width="150" height="60" rx="8" fill="#fef3c7" stroke="#d97706"/>
+  <text x="285" y="95" text-anchor="middle" font-size="10" font-weight="700">Filter + Map</text>
+  <text x="285" y="112" text-anchor="middle" font-size="9">skip Stock · link Head</text>
+
+  <line x1="360" y1="100" x2="410" y2="100" stroke="#475569" stroke-width="2"/>
+
+  <rect x="410" y="55" width="150" height="90" rx="8" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="485" y="85" text-anchor="middle" font-size="10" font-weight="700">IFCV Expenses</text>
+  <text x="485" y="103" text-anchor="middle" font-size="9">account · amount</text>
+  <text x="485" y="119" text-anchor="middle" font-size="9">costing head</text>
+  <text x="485" y="135" text-anchor="middle" font-size="9">distribution method</text>
+
+  <line x1="560" y1="100" x2="605" y2="100" stroke="#475569" stroke-width="2"/>
+
+  <rect x="605" y="55" width="115" height="90" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="662" y="90" text-anchor="middle" font-size="10" font-weight="700">Allocations</text>
+  <text x="662" y="108" text-anchor="middle" font-size="9">per car</text>
+  <text x="662" y="124" text-anchor="middle" font-size="9">amounts</text>
+</svg>
+<p class="caption">Figure 6 — How IFCV builds the expense and allocation tables.</p>
+
+<h3>Account → Costing mapping (examples)</h3>
+<table>
+  <tr><th>Posted account</th><th>Costing</th><th>Distribution</th></tr>
+  <tr><td>Clearing Container - JIL</td><td>clearing_container</td><td>By BL Equal</td></tr>
+  <tr><td>TPA - JIL / Wharfage - JIL</td><td>tpa / wharfage</td><td>By BL Equal</td></tr>
+  <tr><td>ICD - JIL / Shipping Line - JIL</td><td>icd / shipping_line</td><td>By BL M3</td></tr>
+  <tr><td>TRA Duty - JIL</td><td>tra_duty</td><td>By Vehicle Manual</td></tr>
+  <tr><td>Inspection JPY - JIL</td><td>inspection</td><td>By Vehicle Manual</td></tr>
+  <tr><td>JPN Expense JPY - JIL</td><td>japan_cost</td><td>By Vehicle Manual</td></tr>
+  <tr><td>Stock In Hand - JIL</td><td>—</td><td><strong>Ignored</strong></td></tr>
+</table>
+
+<!-- ========== 7 ========== -->
+<div class="pagebreak"></div>
+<h2>7. How money is split: Equal / M3 / Manual</h2>
+
+<svg class="flow" viewBox="0 0 740 220" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <rect x="15" y="15" width="230" height="190" rx="10" fill="#eef2ff" stroke="#4338ca"/>
+  <text x="130" y="42" text-anchor="middle" font-size="12" font-weight="700" fill="#312e81">By BL Equal</text>
+  <text x="130" y="70" text-anchor="middle" font-size="10" fill="#3730a3">Total ÷ number of cars</text>
+  <text x="130" y="100" text-anchor="middle" font-size="9.5" fill="#4338ca">Clearing 786,450</text>
+  <text x="130" y="118" text-anchor="middle" font-size="9.5" fill="#4338ca">÷ 7 = 112,350 each</text>
+  <text x="130" y="150" text-anchor="middle" font-size="9.5" fill="#4338ca">Same idea for TPA,</text>
+  <text x="130" y="168" text-anchor="middle" font-size="9.5" fill="#4338ca">Wharfage BL totals</text>
+
+  <rect x="255" y="15" width="230" height="190" rx="10" fill="#ecfeff" stroke="#0e7490"/>
+  <text x="370" y="42" text-anchor="middle" font-size="12" font-weight="700" fill="#155e75">By BL M3</text>
+  <text x="370" y="70" text-anchor="middle" font-size="10" fill="#0e7490">Share = amount × (car M3 / Σ M3)</text>
+  <text x="370" y="100" text-anchor="middle" font-size="9.5" fill="#155e75">Shipping 9,584.15</text>
+  <text x="370" y="118" text-anchor="middle" font-size="9.5" fill="#155e75">Noah M3 14.733 / 101.959</text>
+  <text x="370" y="136" text-anchor="middle" font-size="9.5" fill="#155e75">→ ≈ 1,384.90 (Excel)</text>
+  <text x="370" y="168" text-anchor="middle" font-size="9.5" fill="#155e75">Same for ICD</text>
+
+  <rect x="495" y="15" width="230" height="190" rx="10" fill="#fff1f2" stroke="#be123c"/>
+  <text x="610" y="42" text-anchor="middle" font-size="12" font-weight="700" fill="#9f1239">By Vehicle Manual</text>
+  <text x="610" y="70" text-anchor="middle" font-size="10" fill="#be123c">User assigns amounts</text>
+  <text x="610" y="100" text-anchor="middle" font-size="9.5" fill="#9f1239">Dialog: Actions →</text>
+  <text x="610" y="118" text-anchor="middle" font-size="9.5" fill="#9f1239">Distribute Manually</text>
+  <text x="610" y="150" text-anchor="middle" font-size="9.5" fill="#9f1239">Auto-detects chassis</text>
+  <text x="610" y="168" text-anchor="middle" font-size="9.5" fill="#9f1239">from JE remark</text>
+</svg>
+<p class="caption">Figure 7 — Three distribution methods on IFCV expense rows.</p>
+
+<h3>Manual dialog (what the user sees)</h3>
+<ol>
+  <li>Open IFCV → <strong>Actions → Distribute Manually</strong></li>
+  <li>Pick an expense row (only rows set to <em>By Vehicle Manual</em>)</li>
+  <li>Optional: <strong>Quick: put full amount on one car</strong></li>
+  <li>Or type amounts per chassis until Remaining = 0</li>
+  <li>Click <strong>Apply</strong></li>
+</ol>
+<div class="callout">
+  If the Journal Entry remark contains a chassis number (e.g. <code>RT1-1006295 | HONDA…</code>), IFCV auto-puts the full amount on that car — Remaining shows <strong>TZS 0.00</strong> in green.
+</div>
+
+<!-- ========== 8 ========== -->
+<h2>8. End-to-end walkthrough — N.TAN039/26MSC</h2>
+<div class="steps">
+  <div class="step">
+    <strong>Import File already exists</strong><br/>
+    Name = supplier invoice <code>N.TAN039/26MSC</code>, BL = <code>MEDUW3445865</code>, 7 cars on that BL.
+  </div>
+  <div class="step">
+    <strong>Create / open Car Costings (projected)</strong><br/>
+    One draft per car with Excel values (M3, duty, TPA, ICD, shipping…). Engine calculates wharfage and landed COST.
+  </div>
+  <div class="step">
+    <strong>Accounts post actuals</strong><br/>
+    · By BL JVs: Clearing, TPA, Wharfage, ICD, Shipping (one total each)<br/>
+    · By Vehicle JVs: TRA Duty / Ex-Bond / Service / … / Inspection / Japan Cost <em>per car</em>
+  </div>
+  <div class="step">
+    <strong>Open IFCV for the Import File</strong><br/>
+    Vehicles + expenses load. Stock In Hand skipped. Costing masters auto-fill when accounts match.
+  </div>
+  <div class="step">
+    <strong>Check distributions</strong><br/>
+    BL Equal / M3 auto-allocate. By Vehicle rows auto-map from chassis remark, or use Distribute Manually.
+  </div>
+  <div class="step">
+    <strong>Submit IFCV</strong> (when ready)<br/>
+    With “Auto Update Car Costing Projected” checked, each car’s draft Car Costing gets the allocated actuals written into matching cost lines and recalculated.
+  </div>
+</div>
+
+<div class="example-box">
+  <strong class="label">Current demo document</strong>
+  <code>IFCV-2026-00001</code> · Import File N.TAN039/26MSC · 7 vehicles · By BL test JVs + 49 per-car By Vehicle JVs · totals balanced (expense = allocated).
+</div>
+
+<!-- ========== 9 ========== -->
+<div class="pagebreak"></div>
+<h2>9. What to click in Desk (user checklist)</h2>
+
+<h3>A. Review projected Car Costing</h3>
+<ol>
+  <li>Desk → <strong>Car Costing</strong> list → filter Import File = N.TAN039/26MSC</li>
+  <li>Open e.g. Noah <code>CC-2026-00023</code></li>
+  <li>Check TZ lines, Japan lines, M3, summary COST</li>
+  <li>Do <strong>not</strong> confuse Excel “COST” (includes tax from selling price) with our landed COST</li>
+</ol>
+
+<h3>B. Work an IFCV</h3>
+<ol>
+  <li>Desk → <strong>Import File Cost Voucher</strong> → open <code>IFCV-2026-00001</code> (or New)</li>
+  <li>Select Import File → tables auto-load (or Actions → Reload from Import File)</li>
+  <li>Scan Expenses: Costing filled? Distribution method correct?</li>
+  <li>For Manual rows: Actions → <strong>Distribute Manually</strong></li>
+  <li>Confirm Total Expense Amount = Total Allocated Amount</li>
+  <li>Submit when business is ready to push into Car Costings</li>
+</ol>
+
+<h3>C. If Costing is blank on an expense</h3>
+<p>
+Open that <strong>Costing</strong> and set <strong>Account</strong> to the same GL account used on the JE/PI.
+IFCV matches by account name. Example: Inspection head → <code>Inspection JPY - JIL</code>.
+</p>
+
+<!-- ========== 10 ========== -->
+<h2>10. What is finished vs what comes next</h2>
+<table>
+  <tr><th>Done now</th><th>Still to settle later</th></tr>
+  <tr>
+    <td>
+      · Costing masters + accounts<br/>
+      · Car Costing projected engine (Excel-accurate landed cost)<br/>
+      · IFCV load / allocate / manual dialog<br/>
+      · Ignore Stock In Hand<br/>
+      · Inspection + Japan Cost account mapping<br/>
+      · Demo data on N.TAN039/26MSC
+    </td>
+    <td>
+      · Submit IFCV → verify push into all 7 Car Costings<br/>
+      · Currency display (JPY JE amounts vs USD Japan lines)<br/>
+      · MKT heads still without Actual rules (THC, Freight, Forwarding…)<br/>
+      · City Levy / VAT / selling PRICE (Excel only for now)<br/>
+      · Production posting discipline (remark with chassis for By Vehicle)
+    </td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>One-sentence summary:</strong>
+  Use <em>Car Costing</em> to estimate each car from Excel rules; use <em>IFCV</em> to take real JE/PI postings on an Import File, ignore stock purchases, split By BL or map By Vehicle, then push those shares back onto the cars.
+</div>
+
+<p class="small" style="margin-top:18pt;">
+  Document generated for Jan International · vsd_jan_integration · working copy for training / UAT.
+  Source of truth for numbers: workspace file <code>1 BL COST.xlsx</code> sheet <code>NEW COST FILE</code>.
+</p>
+
+</body>
+</html>

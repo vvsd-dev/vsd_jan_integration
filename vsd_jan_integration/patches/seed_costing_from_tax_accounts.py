@@ -65,24 +65,42 @@ def _company() -> str | None:
 	return company
 
 
-def _ensure_payable_account(company: str, tax_name: str, currency: str) -> str | None:
-	"""Create/get Liability Payable named like the costing, e.g. 'THC Payable - JIL'."""
-	if not company or not tax_name:
-		return None
-	abbr = frappe.db.get_value("Company", company, "abbr") or ""
-	label = f"{tax_name} Payable".replace("  ", " ").strip()
-	if label.lower().endswith("payable payable"):
-		label = label[: -len(" Payable")]
-	account_name = f"{label} - {abbr}" if abbr else label
+def _ensure_other_payable_group(company: str, currency: str | None = None) -> str | None:
+	"""Ensure Liability group 'Other Payable' (or 'Other Payable JPY') under Current Liabilities.
 
-	existing = frappe.db.get_value("Account", {"name": account_name, "company": company}, "name")
+	Blank account_type — leaf payables under it also blank so JE lines need no Supplier party.
+	Group currency must match leaf currency (ERPNext rule).
+	"""
+	abbr = frappe.db.get_value("Company", company, "abbr") or ""
+	comp_currency = frappe.db.get_value("Company", company, "default_currency") or "TZS"
+	currency = (currency or comp_currency).strip() or comp_currency
+
+	if currency == comp_currency:
+		account_name_only = "Other Payable"
+	else:
+		account_name_only = f"Other Payable {currency}"
+
+	group_name = f"{account_name_only} - {abbr}" if abbr else account_name_only
+	existing = frappe.db.get_value("Account", {"name": group_name, "company": company}, "name")
 	if existing:
+		# Keep group currency aligned when no GLEs / still a group
+		row = frappe.db.get_value(
+			"Account", existing, ["account_currency", "is_group"], as_dict=True
+		)
+		if row and row.is_group and row.account_currency != currency:
+			if not frappe.db.exists("GL Entry", {"account": existing}):
+				try:
+					frappe.db.set_value(
+						"Account", existing, "account_currency", currency, update_modified=False
+					)
+				except Exception:
+					pass
 		return existing
 
 	parent = (
 		frappe.db.get_value(
 			"Account",
-			{"company": company, "account_type": "Payable", "is_group": 1},
+			{"company": company, "account_name": ["like", "%Current Liabilities%"], "is_group": 1},
 			"name",
 			order_by="lft asc",
 		)
@@ -94,17 +112,131 @@ def _ensure_payable_account(company: str, tax_name: str, currency: str) -> str |
 		)
 	)
 	if not parent:
+		return None
+
+	try:
+		acc = frappe.new_doc("Account")
+		acc.account_name = account_name_only
+		acc.company = company
+		acc.parent_account = parent
+		acc.is_group = 1
+		acc.root_type = "Liability"
+		acc.account_type = ""
+		acc.account_currency = currency
+		acc.insert(ignore_permissions=True)
+		return acc.name
+	except Exception:
+		frappe.log_error(title=f"Create Other Payable group {group_name}", message=frappe.get_traceback())
+		return frappe.db.get_value("Account", {"name": group_name, "company": company}, "name")
+
+
+def _ensure_payable_account(company: str, tax_name: str, currency: str | None = None) -> str | None:
+	"""Create/get named Other Payable leaf matching expense account currency.
+
+	- Currency follows the expense account (TZS↔TZS, JPY↔JPY) so Fixed JE credits
+	  balance in account currency without FX blow-ups.
+	- Blank account_type — no Supplier/party on JE lines.
+	"""
+	if not company or not tax_name:
+		return None
+	abbr = frappe.db.get_value("Company", company, "abbr") or ""
+	comp_currency = frappe.db.get_value("Company", company, "default_currency") or "TZS"
+	currency = (currency or comp_currency).strip() or comp_currency
+
+	base_label = f"{tax_name} Payable".replace("  ", " ").strip()
+	if base_label.lower().endswith("payable payable"):
+		base_label = base_label[: -len(" Payable")]
+	# Prefer Title Case when source label is ALL CAPS (Costing.costing_name)
+	if base_label.isupper():
+		base_label = (
+			base_label.title()
+			.replace("Jpy", "JPY")
+			.replace("Tzs", "TZS")
+			.replace("Usd", "USD")
+			.replace("Bl ", "BL ")
+		)
+
+	# Disambiguate foreign-currency leaves from existing company-currency ones
+	if currency == comp_currency:
+		label = base_label
+	else:
+		label = f"{base_label} {currency}"
+
+	account_name = f"{label} - {abbr}" if abbr else label
+	existing = frappe.db.get_value("Account", {"name": account_name, "company": company}, "name")
+	parent = _ensure_other_payable_group(company, currency)
+
+	# Also accept a correctly-currency existing "{tax} Payable" without currency suffix
+	if not existing and currency != comp_currency:
+		plain = f"{base_label} - {abbr}" if abbr else base_label
+		plain_row = frappe.db.get_value(
+			"Account",
+			{"name": plain, "company": company},
+			["name", "account_currency"],
+			as_dict=True,
+		)
+		if plain_row and plain_row.account_currency == currency:
+			existing = plain_row.name
+			account_name = plain
+
+	if existing:
+		row = frappe.db.get_value(
+			"Account",
+			existing,
+			["account_type", "account_currency", "parent_account", "is_group"],
+			as_dict=True,
+		)
+		has_gle = frappe.db.exists("GL Entry", {"account": existing})
+		wrong_currency = bool(row and row.account_currency and row.account_currency != currency)
+		if wrong_currency:
+			# Cannot alter currency with (or without safely) — use currency-suffixed leaf
+			if currency != comp_currency:
+				account_name = f"{base_label} {currency} - {abbr}" if abbr else f"{base_label} {currency}"
+			else:
+				account_name = f"{base_label} OP - {abbr}" if abbr else f"{base_label} OP"
+			existing_alt = frappe.db.get_value("Account", {"name": account_name, "company": company}, "name")
+			if existing_alt:
+				existing = existing_alt
+				row = frappe.db.get_value(
+					"Account",
+					existing,
+					["account_type", "account_currency", "parent_account", "is_group"],
+					as_dict=True,
+				)
+				has_gle = frappe.db.exists("GL Entry", {"account": existing})
+				wrong_currency = bool(row and row.account_currency and row.account_currency != currency)
+			else:
+				existing = None
+
+		if existing and not wrong_currency:
+			updates = {}
+			if row:
+				if row.account_type == "Payable":
+					updates["account_type"] = ""
+				if parent and row.parent_account != parent and not row.is_group:
+					updates["parent_account"] = parent
+			if updates:
+				try:
+					frappe.db.set_value("Account", existing, updates, update_modified=False)
+				except Exception:
+					pass
+			return existing
+
+	if not parent:
 		return frappe.db.get_value("Company", company, "default_payable_account")
 
 	try:
 		acc = frappe.new_doc("Account")
-		acc.account_name = label
+		acc.account_name = label if currency == comp_currency else f"{base_label} {currency}"
+		# When we fell through after wrong_currency, account_name may already include suffix
+		if currency != comp_currency and not acc.account_name.endswith(currency):
+			acc.account_name = f"{base_label} {currency}"
 		acc.company = company
 		acc.parent_account = parent
 		acc.is_group = 0
 		acc.root_type = "Liability"
-		acc.account_type = "Payable"
-		acc.account_currency = currency or frappe.db.get_value("Company", company, "default_currency") or "TZS"
+		acc.account_type = ""  # blank — no Supplier/party on JE lines
+		acc.account_currency = currency
 		acc.insert(ignore_permissions=True)
 		return acc.name
 	except Exception:
@@ -181,15 +313,21 @@ def _excel_currency(code: str, region: str, account_currency: str) -> str:
 
 
 def _link_payable(company: str, costing_name: str, currency: str, current: str | None) -> str | None:
-	pay = current or ""
-	needs = (not pay) or pay.startswith("Creditors")
-	if not needs:
-		return current
+	"""Ensure a named Other Payable in the given currency; replace Creditors / wrong-currency."""
 	label = (costing_name or "").strip()
 	if not label:
 		return current
-	new_pay = _ensure_payable_account(company, label, currency or "TZS")
-	return new_pay or current
+	desired = _ensure_payable_account(company, label, currency or "TZS")
+	if not desired:
+		return current
+	if not current:
+		return desired
+	if current.startswith("Creditors"):
+		return desired
+	cur_curr = frappe.db.get_value("Account", current, "account_currency")
+	if cur_curr and currency and cur_curr != currency:
+		return desired
+	return current
 
 
 def execute():
@@ -267,14 +405,13 @@ def execute():
 					"doctype": "Costing",
 					"costing_code": code,
 					"costing_name": tax_name.upper(),
-					"region": region,
-					"entry_mode": "Variable",
 					**payload,
 				}
 			)
 			doc.insert(ignore_permissions=True)
 
-	# 2) Japan Excel sense: all Japan-region Costings → USD; link payables on every Costing
+	# 2) Japan Excel sense: Japan Costing.currency = USD;
+	#    payable currency always matches expense account (JPY↔JPY, TZS↔TZS)
 	for c in frappe.get_all(
 		"Costing",
 		filters={"disabled": 0},
@@ -283,16 +420,19 @@ def execute():
 		if c.region == "Japan":
 			if c.currency != "USD":
 				frappe.db.set_value("Costing", c.name, "currency", "USD", update_modified=False)
-			pay_currency = _account_currency(c.account, "JPY")
 		else:
 			acc_cur = _account_currency(c.account, c.currency or "TZS")
 			if c.account and c.currency != acc_cur:
 				frappe.db.set_value("Costing", c.name, "currency", acc_cur, update_modified=False)
-			pay_currency = acc_cur
 
-		new_pay = _link_payable(company, c.costing_name, pay_currency, c.payable_account)
+		exp_curr = _account_currency(c.account, "TZS") if c.account else (
+			frappe.db.get_value("Company", company, "default_currency") or "TZS"
+		)
+		new_pay = _link_payable(company, c.costing_name, exp_curr, c.payable_account)
 		if new_pay and new_pay != c.payable_account:
 			frappe.db.set_value("Costing", c.name, "payable_account", new_pay, update_modified=False)
+		elif c.payable_account:
+			_ensure_payable_account(company, c.costing_name or c.name, exp_curr)
 
 	# 3) Fold Custom Field property setters into the Custom Field itself
 	_fold_custom_field_property_setters()

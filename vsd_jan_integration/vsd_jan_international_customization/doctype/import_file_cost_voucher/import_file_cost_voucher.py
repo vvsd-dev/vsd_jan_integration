@@ -9,7 +9,9 @@ from frappe.utils import flt
 
 class ImportFileCostVoucher(Document):
 	def validate(self):
+		self._sync_expense_distribution_from_costing()
 		self._distribute_allocations()
+		self._update_vehicle_purchase_and_charges()
 		self.total_expense_amount = sum(flt(r.amount) for r in (self.expenses or []))
 		self.total_allocated_amount = sum(flt(r.amount) for r in (self.allocations or []))
 
@@ -51,7 +53,7 @@ class ImportFileCostVoucher(Document):
 			return
 
 		# Resolve stock PI line per item
-		pi_groups = defaultdict(lambda: {"items": {}, "company": None, "grand_total": 0})
+		pi_groups = defaultdict(lambda: {"items": {}, "company": None, "grand_total": 0, "supplier": None, "posting_date": None})
 		for item_code, total in by_item_total.items():
 			row = frappe.db.sql(
 				"""
@@ -66,6 +68,8 @@ class ImportFileCostVoucher(Document):
 					pii.cost_center,
 					pii.description,
 					pi.company,
+					pi.supplier,
+					pi.posting_date,
 					pi.grand_total,
 					pi.base_grand_total
 				FROM `tabPurchase Invoice` pi
@@ -84,6 +88,8 @@ class ImportFileCostVoucher(Document):
 			r = row[0]
 			g = pi_groups[r.pi_name]
 			g["company"] = r.company
+			g["supplier"] = r.supplier
+			g["posting_date"] = r.posting_date
 			g["grand_total"] = flt(r.base_grand_total) or flt(r.grand_total)
 			g["items"][item_code] = r
 
@@ -135,154 +141,147 @@ class ImportFileCostVoucher(Document):
 			)
 
 	def _create_and_submit_lcv_for_pi(self, pi_name, group, item_account_map, item_total_map):
-		"""Build LCV(s) from IFCV allocations.
+		"""Build LCV from IFCV — mirrors manual MAT-LCV pattern, ERPNext-safe.
 
-		ERPNext allows only ONE tax row when Distribute Manually — so we create
-		one LCV per expense account (each with that account's per-item charges).
+		ERPNext allows only ONE tax row when Distribute Manually. Strategy:
+		- One LCV with Distribute Manually
+		- One tax row = sum of applicable charges (company currency)
+		- Item.applicable_charges = vehicle/IFCV allocation totals (already computed)
+
+		Per-account JE expenses stay on the books; LCV reclasses the combined charge
+		into stock valuation. Stock In Hand is never included (filtered upstream).
 		"""
-		from collections import defaultdict
-
 		from erpnext.controllers.taxes_and_totals import init_landed_taxes_and_totals
 
 		company = group["company"]
-		# Per-account, per-item amounts (already in company currency)
-		by_account_item = defaultdict(lambda: defaultdict(float))
-		for item_code in group["items"]:
-			for acc, amt in (item_account_map.get(item_code) or {}).items():
-				if flt(amt):
-					by_account_item[acc][item_code] += flt(amt)
-
-		if not by_account_item:
-			return None
-
 		cost_center = frappe.db.get_value("Company", company, "cost_center") or frappe.db.get_value(
 			"Cost Center", {"company": company, "is_group": 0}, "name"
 		)
 
-		created_names = []
-		# Cancel legacy multi-tax LCVs for this IFCV+PI (ERPNext forbids >1 tax on Distribute Manually)
-		legacy = frappe.db.sql(
+		# Prefer vehicle.applicable_charges when present (set on save)
+		charges_by_item = {}
+		for v in self.vehicles or []:
+			if v.item and v.item in group["items"] and flt(v.applicable_charges):
+				charges_by_item[v.item] = flt(v.applicable_charges)
+		if not charges_by_item:
+			charges_by_item = {k: flt(v) for k, v in (item_total_map or {}).items() if flt(v)}
+
+		tax_total = sum(charges_by_item.values())
+		if not tax_total:
+			return None
+
+		desc = f"IFCV {self.name} — applicable charges"
+		existing = frappe.db.sql(
 			"""
-			SELECT DISTINCT lcv.name
+			SELECT lcv.name
 			FROM `tabLanded Cost Voucher` lcv
 			INNER JOIN `tabLanded Cost Purchase Receipt` lpr ON lpr.parent = lcv.name
 			INNER JOIN `tabLanded Cost Taxes and Charges` lct ON lct.parent = lcv.name
 			WHERE lpr.receipt_document = %s
 				AND lcv.docstatus = 1
-				AND lct.description LIKE %s
+				AND lct.description = %s
+			LIMIT 1
 			""",
-			(pi_name, f"%{self.name}%"),
+			(pi_name, desc),
 		)
-		for (lcv_name,) in legacy or []:
-			tax_count = frappe.db.count("Landed Cost Taxes and Charges", {"parent": lcv_name})
-			if tax_count > 1:
-				try:
-					frappe.get_doc("Landed Cost Voucher", lcv_name).cancel()
-				except Exception:
-					frappe.log_error(
-						title=f"Cancel legacy LCV {lcv_name}",
-						message=frappe.get_traceback(),
-					)
+		if existing:
+			return existing[0][0]
 
-		for acc, item_amounts in by_account_item.items():
-			tax_total = sum(flt(v) for v in item_amounts.values())
-			if not tax_total:
-				continue
-
-			desc = f"IFCV {self.name} / {acc}"
-			# Skip if this IFCV already posted an LCV for this PI + expense account
-			existing = frappe.db.sql(
-				"""
-				SELECT lcv.name
-				FROM `tabLanded Cost Voucher` lcv
-				INNER JOIN `tabLanded Cost Purchase Receipt` lpr ON lpr.parent = lcv.name
-				INNER JOIN `tabLanded Cost Taxes and Charges` lct ON lct.parent = lcv.name
-				WHERE lpr.receipt_document = %s
-					AND lcv.docstatus = 1
-					AND lct.expense_account = %s
-					AND lct.description = %s
-				LIMIT 1
-				""",
-				(pi_name, acc, desc),
+		# Pick expense account: prefer first allocated Costing account (non-stock)
+		expense_account = None
+		for item_code, acc_map in (item_account_map or {}).items():
+			for acc in acc_map:
+				if acc and not _is_stock_in_hand_account(acc):
+					expense_account = acc
+					break
+			if expense_account:
+				break
+		if not expense_account:
+			expense_account = frappe.db.get_value(
+				"Company", company, "expenses_included_in_valuation"
+			) or frappe.db.get_value(
+				"Account",
+				{"company": company, "account_type": "Expense Account", "is_group": 0},
+				"name",
 			)
-			if existing:
-				created_names.append(existing[0][0])
+		if not expense_account:
+			frappe.throw(_("No expense account available for Landed Cost Voucher from IFCV"))
+
+		lcv = frappe.new_doc("Landed Cost Voucher")
+		lcv.company = company
+		lcv.posting_date = self.posting_date or frappe.utils.today()
+		lcv.distribute_charges_based_on = "Distribute Manually"
+
+		lcv.append(
+			"purchase_receipts",
+			{
+				"receipt_document_type": "Purchase Invoice",
+				"receipt_document": pi_name,
+				"supplier": group.get("supplier")
+				or frappe.db.get_value("Purchase Invoice", pi_name, "supplier"),
+				"posting_date": group.get("posting_date")
+				or frappe.db.get_value("Purchase Invoice", pi_name, "posting_date"),
+				"grand_total": group["grand_total"],
+			},
+		)
+
+		lcv.append(
+			"taxes",
+			{
+				"expense_account": expense_account,
+				"description": desc,
+				"amount": tax_total,
+			},
+		)
+
+		for item_code, r in group["items"].items():
+			charge = flt(charges_by_item.get(item_code))
+			if not charge:
 				continue
-
-			lcv = frappe.new_doc("Landed Cost Voucher")
-			lcv.company = company
-			lcv.posting_date = self.posting_date or frappe.utils.today()
-			lcv.distribute_charges_based_on = "Distribute Manually"
-
 			lcv.append(
-				"purchase_receipts",
+				"items",
 				{
 					"receipt_document_type": "Purchase Invoice",
 					"receipt_document": pi_name,
-					"grand_total": group["grand_total"],
+					"purchase_receipt_item": r.pii_name,
+					"item_code": item_code,
+					"description": r.description or item_code,
+					"qty": flt(r.qty) or 1,
+					"rate": flt(r.base_rate) or flt(r.rate),
+					"amount": flt(r.base_amount) or flt(r.amount),
+					"cost_center": r.cost_center or cost_center,
+					"applicable_charges": charge,
 				},
 			)
 
-			lcv.append(
-				"taxes",
-				{
-					"expense_account": acc,
-					"description": desc,
-					"amount": tax_total,
-				},
-			)
+		if not lcv.items:
+			return None
 
-			for item_code, r in group["items"].items():
-				charge = flt(item_amounts.get(item_code))
-				if not charge:
-					continue
-				lcv.append(
-					"items",
-					{
-						"receipt_document_type": "Purchase Invoice",
-						"receipt_document": pi_name,
-						"purchase_receipt_item": r.pii_name,
-						"item_code": item_code,
-						"description": r.description or item_code,
-						"qty": flt(r.qty) or 1,
-						"rate": flt(r.base_rate) or flt(r.rate),
-						"amount": flt(r.base_amount) or flt(r.amount),
-						"cost_center": r.cost_center or cost_center,
-						"applicable_charges": charge,
-					},
-				)
+		items_total = sum(flt(i.applicable_charges) for i in lcv.items)
+		diff = flt(tax_total) - flt(items_total)
+		if lcv.items and abs(diff) >= 0.0001:
+			lcv.items[-1].applicable_charges = flt(lcv.items[-1].applicable_charges) + diff
 
-			if not lcv.items:
-				continue
-
-			# Reconcile rounding so applicable charges == tax amount (JPY→TZS FX)
+		try:
+			lcv.flags.ignore_permissions = True
+			init_landed_taxes_and_totals(lcv)
+			lcv.set_total_taxes_and_charges()
+			if lcv.taxes:
+				lcv.taxes[0].amount = tax_total
+			lcv.set_total_taxes_and_charges()
 			items_total = sum(flt(i.applicable_charges) for i in lcv.items)
-			diff = flt(tax_total) - flt(items_total)
+			diff = flt(lcv.total_taxes_and_charges) - flt(items_total)
 			if lcv.items and abs(diff) >= 0.0001:
 				lcv.items[-1].applicable_charges = flt(lcv.items[-1].applicable_charges) + diff
-
-			try:
-				lcv.flags.ignore_permissions = True
-				init_landed_taxes_and_totals(lcv)
-				lcv.set_total_taxes_and_charges()
-				# Re-apply tax amount after init (some versions overwrite)
-				if lcv.taxes:
-					lcv.taxes[0].amount = tax_total
-				lcv.set_total_taxes_and_charges()
-				items_total = sum(flt(i.applicable_charges) for i in lcv.items)
-				diff = flt(lcv.total_taxes_and_charges) - flt(items_total)
-				if lcv.items and abs(diff) >= 0.0001:
-					lcv.items[-1].applicable_charges = flt(lcv.items[-1].applicable_charges) + diff
-				lcv.insert(ignore_permissions=True)
-				lcv.submit()
-				created_names.append(lcv.name)
-			except Exception:
-				frappe.log_error(
-					title=f"IFCV LCV {self.name} / {acc}",
-					message=frappe.get_traceback(),
-				)
-
-		return ", ".join(created_names) if created_names else None
+			lcv.insert(ignore_permissions=True)
+			lcv.submit()
+			return lcv.name
+		except Exception:
+			frappe.log_error(
+				title=f"IFCV LCV {self.name} / {pi_name}",
+				message=frappe.get_traceback(),
+			)
+			return None
 
 	def push_actual_to_item(self):
 		"""Match IFCV allocations onto Item Expected/Actual costing tables.
@@ -386,6 +385,122 @@ class ImportFileCostVoucher(Document):
 				_("Updated Item Actual costs for: {0}").format(", ".join(touched)),
 			)
 
+	def _costing_meta_for_expense(self, exp):
+		"""Resolve Costing allocation_scope + entry_mode for an expense line (source of truth)."""
+		head = None
+		if exp.costing_head and frappe.db.exists("Costing", exp.costing_head):
+			head = frappe.db.get_value(
+				"Costing",
+				exp.costing_head,
+				["name", "allocation_scope", "entry_mode", "account", "costing_code"],
+				as_dict=True,
+			)
+		elif exp.expense_account:
+			heads = frappe.get_all(
+				"Costing",
+				filters={"disabled": 0, "account": exp.expense_account},
+				fields=["name", "allocation_scope", "entry_mode", "account", "costing_code"],
+			)
+			if len(heads) == 1:
+				head = heads[0]
+			elif heads:
+				code = (getattr(exp, "costing_code", None) or "").strip()
+				head = next((h for h in heads if h.costing_code == code), heads[0])
+		if head:
+			if not exp.costing_head:
+				exp.costing_head = head.name
+			if not getattr(exp, "costing_code", None) and head.costing_code:
+				exp.costing_code = head.costing_code
+			return head.allocation_scope, head.entry_mode
+		return None, None
+
+	def _sync_expense_distribution_from_costing(self):
+		"""Always derive allocation_scope + distribution_method from Costing (no child-table defaults)."""
+		for exp in self.expenses or []:
+			scope, entry_mode = self._costing_meta_for_expense(exp)
+			if scope is not None or entry_mode:
+				if scope:
+					exp.allocation_scope = scope
+				exp.distribution_method = distribution_method_from_costing(scope, entry_mode)
+
+	def _update_vehicle_purchase_and_charges(self):
+		"""Fill purchase FX from submitted PI + applicable_charges from allocations (company currency).
+
+		applicable_charges is what Landed Cost Voucher items get on Distribute Manually.
+		Stock In Hand expenses are already excluded from IFCV expenses/allocations.
+		"""
+		from collections import defaultdict
+
+		company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+			"Global Defaults", "default_company"
+		)
+		posting_date = self.posting_date or frappe.utils.today()
+		comp_cur = frappe.db.get_value("Company", company, "default_currency") if company else None
+
+		# First pass: purchase FX from submitted stock PI
+		fx_by_item = {}
+		for v in self.vehicles or []:
+			if not v.item:
+				continue
+			pi = _purchase_invoice_for_item(v.item, self.import_file)
+			if pi:
+				v.purchase_price = flt(pi.rate)
+				v.purchase_currency = pi.currency or v.purchase_currency or "JPY"
+				v.exchange_rate = flt(pi.conversion_rate) or 1.0
+				v.purchase_amount_company = (
+					flt(pi.base_amount)
+					if flt(pi.base_amount)
+					else flt(v.purchase_price) * flt(v.exchange_rate)
+				)
+			else:
+				if not flt(v.exchange_rate):
+					v.exchange_rate = 1.0
+					if v.purchase_currency and comp_cur and v.purchase_currency != comp_cur:
+						try:
+							from erpnext.setup.utils import get_exchange_rate
+
+							v.exchange_rate = (
+								flt(
+									get_exchange_rate(
+										v.purchase_currency,
+										comp_cur,
+										posting_date,
+										"for_buying",
+									)
+								)
+								or 1.0
+							)
+						except Exception:
+							v.exchange_rate = 1.0
+				v.purchase_amount_company = flt(v.purchase_price) * flt(v.exchange_rate)
+
+			fx_by_item[v.item] = {
+				"currency": v.purchase_currency,
+				"rate": flt(v.exchange_rate) or 1.0,
+			}
+
+		# Second pass: applicable charges (prefer PI FX for same currency as purchase)
+		charges_by_item = defaultdict(float)
+		for a in self.allocations or []:
+			if not a.item or not flt(a.amount):
+				continue
+			acc = a.account or frappe.db.get_value("Costing", a.costing_head, "account")
+			cur = a.currency or (
+				frappe.db.get_value("Account", acc, "account_currency") if acc else None
+			)
+			fx = fx_by_item.get(a.item) or {}
+			if cur and comp_cur and cur == comp_cur:
+				base_amt = flt(a.amount)
+			elif cur and fx.get("currency") == cur and flt(fx.get("rate")):
+				base_amt = flt(a.amount) * flt(fx["rate"])
+			else:
+				base_amt = _amount_in_company_currency(flt(a.amount), cur, company, posting_date)
+			charges_by_item[a.item] += base_amt
+
+		for v in self.vehicles or []:
+			if v.item:
+				v.applicable_charges = flt(charges_by_item.get(v.item))
+
 	def _vehicle_rows(self):
 		rows = []
 		for v in self.vehicles or []:
@@ -396,12 +511,33 @@ class ImportFileCostVoucher(Document):
 					{
 						"name": v.item,
 						"custom_m3": flt(v.m3),
+						"custom_chassis_no": (v.chassis_no or "").strip()
+						or frappe.db.get_value("Item", v.item, "custom_chassis_no"),
 					}
 				)
 			)
 		if rows:
 			return rows
 		return get_vehicles_for_import_file(self.import_file)
+
+	def _allocation_dict(self, item_name, exp, amount, chassis_no=None):
+		"""Build an allocation row; always set chassis_no (fetch_from does not run on append)."""
+		if not chassis_no:
+			chassis_no = frappe.db.get_value("Item", item_name, "custom_chassis_no")
+		return {
+			"item": item_name,
+			"chassis_no": chassis_no,
+			"costing_head": exp.costing_head,
+			"account": exp.expense_account,
+			"currency": exp.currency
+			or (
+				frappe.db.get_value("Account", exp.expense_account, "account_currency")
+				if exp.expense_account
+				else None
+			),
+			"amount": flt(amount),
+			"source_row": exp.idx,
+		}
 
 	def _distribute_allocations(self, keep_manual=True):
 		manual_rows = []
@@ -443,22 +579,32 @@ class ImportFileCostVoucher(Document):
 		items = self._vehicle_rows()
 		if not items:
 			for a in manual_rows:
+				if not a.get("chassis_no") and a.get("item"):
+					a["chassis_no"] = frappe.db.get_value("Item", a["item"], "custom_chassis_no")
 				self.append("allocations", a)
 			return
 
 		total_m3 = sum(flt(i.custom_m3) for i in items) or 0
 		item_names = {i.name for i in items}
 		chassis_to_item = {
-			(frappe.db.get_value("Item", i.name, "custom_chassis_no") or "").upper(): i.name for i in items
+			(i.custom_chassis_no or frappe.db.get_value("Item", i.name, "custom_chassis_no") or "").upper(): i.name
+			for i in items
 		}
+		formula_expenses = []
 
 		for exp in self.expenses or []:
 			if not flt(exp.amount):
+				continue
+			if exp.distribution_method == "By Formula":
+				# Second pass after other methods have filled line amounts (e.g. tra_duty)
+				formula_expenses.append(exp)
 				continue
 			if exp.distribution_method == "By Vehicle Manual":
 				kept = [a for a in manual_rows if a.get("source_row") == exp.idx]
 				if kept:
 					for a in kept:
+						if not a.get("chassis_no") and a.get("item"):
+							a["chassis_no"] = frappe.db.get_value("Item", a["item"], "custom_chassis_no")
 						self.append("allocations", a)
 					continue
 
@@ -475,22 +621,11 @@ class ImportFileCostVoucher(Document):
 							matched = item_name
 							break
 				if matched:
-					self.append(
-						"allocations",
-						{
-							"item": matched,
-							"costing_head": exp.costing_head,
-							"account": exp.expense_account,
-							"currency": exp.currency
-							or (
-								frappe.db.get_value("Account", exp.expense_account, "account_currency")
-								if exp.expense_account
-								else None
-							),
-							"amount": flt(exp.amount),
-							"source_row": exp.idx,
-						},
+					ch = next(
+						(i.custom_chassis_no for i in items if i.name == matched),
+						None,
 					)
+					self.append("allocations", self._allocation_dict(matched, exp, exp.amount, ch))
 				continue
 
 			for item in items:
@@ -501,20 +636,59 @@ class ImportFileCostVoucher(Document):
 
 				self.append(
 					"allocations",
-					{
-						"item": item.name,
-						"costing_head": exp.costing_head,
-						"account": exp.expense_account,
-						"currency": exp.currency
-						or (
-							frappe.db.get_value("Account", exp.expense_account, "account_currency")
-							if exp.expense_account
-							else None
-						),
-						"amount": amount,
-						"source_row": exp.idx,
-					},
+					self._allocation_dict(item.name, exp, amount, item.custom_chassis_no),
 				)
+
+		# Formula heads (e.g. Wharfage = TRA Duty × 7%): bulk JE at BL, split by formula
+		if formula_expenses:
+			self._distribute_formula_expenses(formula_expenses, items)
+
+	def _distribute_formula_expenses(self, formula_expenses, items):
+		"""Split BL-bulk Formula expenses using Costing.formula and sibling allocations.
+
+		Example: Wharfage formula `{line.tra_duty} * 0.07` with TRA already allocated
+		per car → Noah TRA 9,600,000 → Wharfage 672,000 (not equal BL share).
+		"""
+		from collections import defaultdict
+
+		from vsd_jan_integration.vsd_jan_international_customization.utils.costing_engine import (
+			_eval,
+		)
+
+		line_by_item = defaultdict(dict)
+		for a in self.allocations or []:
+			if not a.item or not a.costing_head:
+				continue
+			code = frappe.db.get_value("Costing", a.costing_head, "costing_code") or a.costing_head
+			line_by_item[a.item][code] = line_by_item[a.item].get(code, 0) + flt(a.amount)
+
+		for exp in formula_expenses:
+			formula = None
+			if exp.costing_head:
+				formula = frappe.db.get_value("Costing", exp.costing_head, "formula")
+			raw = {}
+			for item in items:
+				ctx = {"line": dict(line_by_item.get(item.name) or {})}
+				try:
+					raw[item.name] = flt(_eval(formula, ctx)) if formula else 0.0
+				except Exception:
+					raw[item.name] = 0.0
+			total_raw = sum(raw.values())
+			code = (
+				(frappe.db.get_value("Costing", exp.costing_head, "costing_code") if exp.costing_head else None)
+				or (exp.costing_head or "")
+			)
+			for item in items:
+				if total_raw:
+					amount = flt(exp.amount) * (raw[item.name] / total_raw)
+				else:
+					amount = flt(exp.amount) / len(items) if items else 0
+				self.append(
+					"allocations",
+					self._allocation_dict(item.name, exp, amount, item.custom_chassis_no),
+				)
+				if code:
+					line_by_item[item.name][code] = line_by_item[item.name].get(code, 0) + amount
 
 
 def _amount_in_company_currency(amount, currency, company, date=None):
@@ -558,6 +732,71 @@ def _amount_from_company_currency(base_amount, currency, company, date=None):
 	return (flt(base_amount) / inv) if inv else flt(base_amount)
 
 
+def _purchase_invoice_for_item(item_code, import_file=None):
+	"""Prefer submitted stock PI for this item (same Import File when set)."""
+	params = [item_code]
+	import_filter = ""
+	if import_file and frappe.db.has_column("Purchase Invoice", "import_file"):
+		import_filter = "AND pi.import_file = %s"
+		params.append(import_file)
+
+	rows = frappe.db.sql(
+		f"""
+		SELECT
+			pi.name as pi_name,
+			pi.currency,
+			pi.conversion_rate,
+			pi.docstatus,
+			pi.update_stock,
+			pii.rate,
+			pii.amount,
+			pii.base_rate,
+			pii.base_amount
+		FROM `tabPurchase Invoice Item` pii
+		INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
+		WHERE pii.item_code = %s
+			AND pi.docstatus = 1
+			AND pi.update_stock = 1
+			{import_filter}
+		ORDER BY pi.posting_date DESC, pi.creation DESC
+		LIMIT 1
+		""",
+		tuple(params),
+		as_dict=True,
+	)
+	if rows:
+		return rows[0]
+
+	# Fallback: any submitted PI on Import File (even if not update_stock)
+	if import_file and frappe.db.has_column("Purchase Invoice", "import_file"):
+		rows = frappe.db.sql(
+			"""
+			SELECT
+				pi.name as pi_name,
+				pi.currency,
+				pi.conversion_rate,
+				pi.docstatus,
+				pi.update_stock,
+				pii.rate,
+				pii.amount,
+				pii.base_rate,
+				pii.base_amount
+			FROM `tabPurchase Invoice Item` pii
+			INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
+			WHERE pii.item_code = %s
+				AND pi.import_file = %s
+				AND pi.docstatus = 1
+			ORDER BY pi.update_stock DESC, pi.posting_date DESC, pi.creation DESC
+			LIMIT 1
+			""",
+			(item_code, import_file),
+			as_dict=True,
+		)
+		if rows:
+			return rows[0]
+	return None
+
+
 def get_vehicles_for_import_file(import_file):
 	"""Items for an Import File.
 
@@ -565,6 +804,9 @@ def get_vehicles_for_import_file(import_file):
 	1. Import File.bl_number -> Item.custom_bl
 	2. If BL blank, Import File.supplier_invoice_no -> Item.custom_bl
 	3. Items on Purchase Invoices linked to this Import File (covers no-BL cars)
+
+	Each vehicle includes purchase_price / purchase_currency / exchange_rate /
+	purchase_amount_company from submitted PI (preferred) or Item.custom_price.
 	"""
 	if not import_file:
 		return []
@@ -583,17 +825,30 @@ def get_vehicles_for_import_file(import_file):
 		for v in frappe.get_all(
 			"Item",
 			filters={"custom_bl": key, "disabled": 0},
-			fields=["name", "item_name", "custom_chassis_no", "custom_maker", "custom_m3", "custom_new_stock_id"],
+			fields=[
+				"name",
+				"item_name",
+				"custom_chassis_no",
+				"custom_maker",
+				"custom_m3",
+				"custom_new_stock_id",
+				"custom_price",
+			],
 			order_by="name asc",
 		):
 			by_name[v.name] = v
 
 	# Fallback / supplement: cars already on a PI for this Import File (BL often N/A on MKT)
+	pi_prices = {}
 	if frappe.db.has_column("Purchase Invoice", "import_file"):
 		pi_rows = frappe.db.sql(
 			"""
-			SELECT DISTINCT
-				i.name, i.item_name, i.custom_chassis_no, i.custom_maker, i.custom_m3, i.custom_new_stock_id
+			SELECT
+				i.name, i.item_name, i.custom_chassis_no, i.custom_maker, i.custom_m3,
+				i.custom_new_stock_id, i.custom_price,
+				pii.rate as pi_rate, pii.base_rate, pii.base_amount,
+				pi.currency as pi_currency, pi.conversion_rate, pi.docstatus, pi.update_stock,
+				pi.modified as pi_modified
 			FROM `tabPurchase Invoice Item` pii
 			INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
 			INNER JOIN `tabItem` i ON i.name = pii.item_code
@@ -601,13 +856,52 @@ def get_vehicles_for_import_file(import_file):
 				AND pi.docstatus < 2
 				AND IFNULL(i.disabled, 0) = 0
 				AND IFNULL(pii.item_code, '') != ''
-			ORDER BY i.name
+			ORDER BY
+				pi.docstatus DESC,
+				pi.update_stock DESC,
+				pi.modified DESC,
+				i.name
 			""",
 			import_file,
 			as_dict=True,
 		)
 		for v in pi_rows:
 			by_name.setdefault(v.name, v)
+			# Prefer submitted stock PI row when several PIs exist
+			existing = pi_prices.get(v.name)
+			take = False
+			if not existing:
+				take = True
+			elif flt(v.docstatus) == 1 and flt(existing.get("docstatus")) != 1:
+				take = True
+			elif (
+				flt(v.docstatus) == flt(existing.get("docstatus"))
+				and flt(v.update_stock) > flt(existing.get("update_stock") or 0)
+			):
+				take = True
+			if take and flt(v.pi_rate) > 0:
+				pi_prices[v.name] = {
+					"purchase_price": flt(v.pi_rate),
+					"purchase_currency": v.pi_currency or "JPY",
+					"exchange_rate": flt(v.conversion_rate) or 1.0,
+					"purchase_amount_company": flt(v.base_amount)
+					or (flt(v.pi_rate) * (flt(v.conversion_rate) or 1.0)),
+					"docstatus": v.docstatus,
+					"update_stock": v.update_stock,
+				}
+
+	# Enrich purchase price on every vehicle
+	for name, v in by_name.items():
+		if name in pi_prices:
+			v["purchase_price"] = pi_prices[name]["purchase_price"]
+			v["purchase_currency"] = pi_prices[name]["purchase_currency"]
+			v["exchange_rate"] = pi_prices[name]["exchange_rate"]
+			v["purchase_amount_company"] = pi_prices[name]["purchase_amount_company"]
+		else:
+			v["purchase_price"] = flt(v.get("custom_price"))
+			v["purchase_currency"] = "JPY" if flt(v.get("custom_price")) else None
+			v["exchange_rate"] = 1.0
+			v["purchase_amount_company"] = flt(v.get("custom_price"))
 
 	return sorted(by_name.values(), key=lambda r: r.name or "")
 
@@ -622,12 +916,16 @@ def _is_stock_in_hand_account(account):
 	return account_type == "Stock"
 
 
-def distribution_method_from_costing(allocation_scope):
+def distribution_method_from_costing(allocation_scope, entry_mode=None):
 	"""Map Costing.allocation_scope → IFCV expense distribution_method.
 
 	Costing is the source of truth (no voucher hardcoding).
 	Legacy value \"By BL\" is treated as By BL Equal.
+	Formula entry_mode (or scope By Formula) → split bulk JE via Costing.formula
+	(e.g. Wharfage = TRA Duty × 7%), even when the JE itself is posted at BL level.
 	"""
+	if (entry_mode or "").strip() == "Formula" or (allocation_scope or "").strip() == "By Formula":
+		return "By Formula"
 	scope = (allocation_scope or "").strip()
 	if scope == "By Vehicle":
 		return "By Vehicle Manual"
@@ -696,7 +994,15 @@ def get_posted_expenses(import_file):
 		for h in frappe.get_all(
 			"Costing",
 			filters={"disabled": 0, "account": ["is", "set"]},
-			fields=["name", "costing_code", "account", "allocation_scope", "currency"],
+			fields=[
+				"name",
+				"costing_code",
+				"account",
+				"allocation_scope",
+				"currency",
+				"entry_mode",
+				"formula",
+			],
 		)
 		if h.account
 	}
@@ -706,8 +1012,9 @@ def get_posted_expenses(import_file):
 		if _is_stock_in_hand_account(row.expense_account):
 			continue
 		head = heads_by_account.get(row.expense_account)
+		# Same account on multiple Costing heads: prefer Formula / explicit code match later on validate
 		method = (
-			distribution_method_from_costing(head.allocation_scope)
+			distribution_method_from_costing(head.allocation_scope, entry_mode=head.entry_mode)
 			if head
 			else "By BL Equal"
 		)
@@ -725,6 +1032,8 @@ def get_posted_expenses(import_file):
 				"source": row.source,
 				"costing_head": head.name if head else None,
 				"costing_code": head.costing_code if head else None,
+				"allocation_scope": head.allocation_scope if head else None,
+				"entry_mode": head.entry_mode if head else None,
 				"distribution_method": method,
 				"linked_item": row.linked_item,
 			}
@@ -785,11 +1094,47 @@ def load_from_import_file(import_file, distribution_basis=None):
 				"maker": v.custom_maker,
 				"m3": flt(v.custom_m3),
 				"stock_id": v.custom_new_stock_id,
+				"purchase_price": flt(v.get("purchase_price")),
+				"purchase_currency": v.get("purchase_currency") or "JPY",
+				"exchange_rate": flt(v.get("exchange_rate")) or 1.0,
+				"purchase_amount_company": flt(v.get("purchase_amount_company")),
+				"applicable_charges": 0,
 			}
 		)
 
 	expenses = get_posted_expenses(import_file)
 	return {"vehicles": vehicles, "expenses": expenses}
+
+
+@frappe.whitelist()
+def reload_from_import_file(docname):
+	"""Reload vehicles/expenses from Import File, sync methods from Costing, rebuild allocations."""
+	doc = frappe.get_doc("Import File Cost Voucher", docname)
+	if not doc.import_file:
+		frappe.throw(_("Import File is required"))
+
+	data = load_from_import_file(doc.import_file)
+	doc.set("vehicles", [])
+	doc.set("expenses", [])
+	doc.set("allocations", [])
+	for v in data["vehicles"]:
+		doc.append("vehicles", v)
+	for e in data["expenses"]:
+		doc.append("expenses", e)
+
+	doc._sync_expense_distribution_from_costing()
+	doc._distribute_allocations(keep_manual=False)
+	doc.total_expense_amount = sum(flt(r.amount) for r in (doc.expenses or []))
+	doc.total_allocated_amount = sum(flt(r.amount) for r in (doc.allocations or []))
+	doc.flags.ignore_permissions = True
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {
+		"name": doc.name,
+		"vehicles": len(doc.vehicles or []),
+		"expenses": len(doc.expenses or []),
+		"allocations": len(doc.allocations or []),
+	}
 
 
 @frappe.whitelist()
@@ -816,6 +1161,8 @@ def apply_manual_distribution(docname, row_idx, allocations):
 	kept = [
 		{
 			"item": a.item,
+			"chassis_no": a.chassis_no
+			or frappe.db.get_value("Item", a.item, "custom_chassis_no"),
 			"costing_head": a.costing_head,
 			"account": a.account,
 			"currency": a.currency,
@@ -836,9 +1183,12 @@ def apply_manual_distribution(docname, row_idx, allocations):
 	for a in allocations:
 		amount = flt(a.get("amount"))
 		total += amount
+		item_code = a.get("item")
 		manual.append(
 			{
-				"item": a.get("item"),
+				"item": item_code,
+				"chassis_no": a.get("chassis_no")
+				or frappe.db.get_value("Item", item_code, "custom_chassis_no"),
 				"costing_head": expense.costing_head,
 				"account": expense.expense_account,
 				"currency": exp_currency,

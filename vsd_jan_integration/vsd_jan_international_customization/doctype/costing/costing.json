@@ -63,12 +63,12 @@
   },
   {
    "default": "By Vehicle",
-   "description": "By Vehicle = map to specific cars (manual/per-car JE). By BL Equal = split bulk amount equally across cars. By BL M3 = split by each car's M3 share. IFCV uses this — do not hardcode on the voucher.",
+   "description": "By Vehicle = map to specific cars (manual/per-car JE). By BL Equal = split bulk amount equally. By BL M3 = split by M3 share. By Formula = bulk JE at BL, split using Costing formula (e.g. Wharfage = TRA Duty × 7%).",
    "fieldname": "allocation_scope",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Allocation Scope",
-   "options": "By Vehicle\nBy BL Equal\nBy BL M3",
+   "options": "By Vehicle\nBy BL Equal\nBy BL M3\nBy Formula",
    "reqd": 1
   },
   {

@@ -70,7 +70,7 @@ COSTING_HEADS = [
 		"costing_name": "WHARFAGE",
 		"region": "Tanzania",
 		"entry_mode": "Formula",
-		"allocation_scope": "By BL Equal",
+		"allocation_scope": "By Formula",
 		"display_order": 50,
 		"currency": "TZS",
 		"formula": "{line.tra_duty} * 0.07",

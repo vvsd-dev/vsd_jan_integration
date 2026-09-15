@@ -1,20 +1,80 @@
 {
  "actions": [],
+ "creation": "2026-09-11 09:18:29.421493",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "field_order": ["item","chassis_no","costing_head","account","currency","amount","source_row"],
- "fields": [
-  {"fieldname":"item","fieldtype":"Link","label":"Item","options":"Item","reqd":1,"in_list_view":1},
-  {"fieldname":"chassis_no","fieldtype":"Data","label":"Chassis No","read_only":1,"fetch_from":"item.custom_chassis_no","in_list_view":1},
-  {"fieldname":"costing_head","fieldtype":"Link","label":"Costing","options":"Costing","in_list_view":1},
-  {"fieldname":"account","fieldtype":"Link","label":"Account","options":"Account","in_list_view":1},
-  {"fieldname":"currency","fieldtype":"Link","label":"Currency","options":"Currency","read_only":1,"in_list_view":1},
-  {"fieldname":"amount","fieldtype":"Currency","label":"Amount","options":"currency","in_list_view":1},
-  {"fieldname":"source_row","fieldtype":"Int","label":"Expense Row #","read_only":1}
+ "field_order": [
+  "item",
+  "chassis_no",
+  "costing_head",
+  "account",
+  "currency",
+  "amount",
+  "source_row"
  ],
- "istable":1,
- "module":"VSD Jan International Customization",
- "name":"Import File Cost Voucher Allocation",
- "permissions":[]
+ "fields": [
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item.custom_chassis_no",
+   "fieldname": "chassis_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Chassis No",
+   "read_only": 1
+  },
+  {
+   "fieldname": "costing_head",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Costing",
+   "options": "Costing"
+  },
+  {
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Account",
+   "options": "Account"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Amount",
+   "options": "currency"
+  },
+  {
+   "fieldname": "source_row",
+   "fieldtype": "Int",
+   "label": "Expense Row #",
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-14 20:42:34.035360",
+ "modified_by": "Administrator",
+ "module": "VSD Jan International Customization",
+ "name": "Import File Cost Voucher Allocation",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
 }

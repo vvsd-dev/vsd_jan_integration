@@ -11,6 +11,7 @@
   "source",
   "column_break_1",
   "costing_head",
+  "allocation_scope",
   "costing_code",
   "distribution_method",
   "linked_item",
@@ -22,18 +23,19 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Expense Account",
-   "options": "Account"
+   "options": "Account",
+   "read_only": 1
   },
   {
    "fieldname": "description",
    "fieldtype": "Small Text",
    "in_list_view": 1,
-   "label": "Description"
+   "label": "Description",
+   "read_only": 1
   },
   {
    "fieldname": "currency",
    "fieldtype": "Link",
-   "in_list_view": 1,
    "label": "Currency",
    "options": "Currency",
    "read_only": 1
@@ -44,6 +46,7 @@
    "in_list_view": 1,
    "label": "Amount",
    "options": "currency",
+   "read_only": 1,
    "reqd": 1
   },
   {
@@ -61,7 +64,16 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Costing",
-   "options": "Costing"
+   "options": "Costing",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "costing_head.allocation_scope",
+   "fieldname": "allocation_scope",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Allocation Scope",
+   "read_only": 1
   },
   {
    "fetch_from": "costing_head.costing_code",
@@ -71,12 +83,12 @@
    "read_only": 1
   },
   {
-   "default": "By BL Equal",
    "fieldname": "distribution_method",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Distribution Method",
-   "options": "By BL Equal\nBy BL M3\nBy Vehicle Manual"
+   "options": "By BL Equal\nBy BL M3\nBy Vehicle Manual\nBy Formula",
+   "read_only": 1
   },
   {
    "fieldname": "linked_item",

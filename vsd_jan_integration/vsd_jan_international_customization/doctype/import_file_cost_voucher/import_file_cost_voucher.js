@@ -27,7 +27,11 @@ frappe.ui.form.on('Import File Cost Voucher', {
 	},
 });
 
-function distributionMethodFromCosting(scope) {
+function distributionMethodFromCosting(scope, entryMode) {
+	// Keep in sync with import_file_cost_voucher.distribution_method_from_costing (Python)
+	if ((entryMode || '').trim() === 'Formula' || (scope || '').trim() === 'By Formula') {
+		return 'By Formula';
+	}
 	if (scope === 'By Vehicle') return 'By Vehicle Manual';
 	if (scope === 'By BL M3') return 'By BL M3';
 	if (scope === 'By BL Equal' || scope === 'By BL') return 'By BL Equal';
@@ -60,27 +64,45 @@ frappe.ui.form.on('Import File Cost Voucher Expense', {
 		});
 	},
 
-	costing_head(frm, cdt, cdn) {
-		const row = locals[cdt][cdn];
-		if (!row.costing_head) return;
-		frappe.db.get_value('Costing', row.costing_head, ['allocation_scope', 'account', 'costing_code', 'currency'])
-			.then(r => {
-				if (!r.message) return;
-				frappe.model.set_value(
-					cdt,
-					cdn,
-					'distribution_method',
-					distributionMethodFromCosting(r.message.allocation_scope)
-				);
-				if (r.message.account && !row.expense_account) {
-					frappe.model.set_value(cdt, cdn, 'expense_account', r.message.account);
-				}
-				if (r.message.currency) {
-					frappe.model.set_value(cdt, cdn, 'currency', r.message.currency);
-				}
-			});
-	},
 });
+
+function applyLoadFromImportFileResult(frm, data) {
+	if (!data) return;
+
+	frm.clear_table('vehicles');
+	(data.vehicles || []).forEach(v => {
+		const child = frm.add_child('vehicles');
+		Object.keys(v).forEach(k => {
+			child[k] = v[k];
+		});
+	});
+
+	frm.clear_table('expenses');
+	(data.expenses || []).forEach(e => {
+		const child = frm.add_child('expenses');
+		// Costing drives scope + method — set explicitly (avoid child-table default By BL Equal)
+		child.costing_head = e.costing_head;
+		child.costing_code = e.costing_code;
+		child.allocation_scope = e.allocation_scope;
+		child.distribution_method = e.distribution_method;
+		child.expense_account = e.expense_account;
+		child.description = e.description;
+		child.currency = e.currency;
+		child.amount = e.amount;
+		child.source = e.source;
+		child.linked_item = e.linked_item;
+	});
+
+	frm.clear_table('allocations');
+	frm.refresh_fields(['vehicles', 'expenses', 'allocations']);
+
+	const vCount = (data.vehicles || []).length;
+	const eCount = (data.expenses || []).length;
+	frappe.show_alert({
+		message: __('Loaded {0} vehicles and {1} expense lines', [vCount, eCount]),
+		indicator: vCount || eCount ? 'green' : 'orange',
+	});
+}
 
 function loadFromImportFile(frm) {
 	if (!frm.doc.import_file) {
@@ -88,41 +110,39 @@ function loadFromImportFile(frm) {
 		return;
 	}
 
+	// Saved voucher: server reload syncs Costing → scope/method and rebuilds allocations
+	if (!frm.is_new() && frm.doc.name) {
+		frappe.call({
+			method:
+				'vsd_jan_integration.vsd_jan_international_customization.doctype.import_file_cost_voucher.import_file_cost_voucher.reload_from_import_file',
+			args: { docname: frm.doc.name },
+			freeze: true,
+			freeze_message: __('Reloading from Import File and rebuilding allocations...'),
+			callback(r) {
+				if (!r.message) return;
+				frm.reload_doc().then(() => {
+					frappe.show_alert({
+						message: __('Reloaded — {0} expenses, {1} allocations', [
+							r.message.expenses,
+							r.message.allocations,
+						]),
+						indicator: 'green',
+					});
+				});
+			},
+		});
+		return;
+	}
+
 	frappe.call({
-		method: 'vsd_jan_integration.vsd_jan_international_customization.doctype.import_file_cost_voucher.import_file_cost_voucher.load_from_import_file',
-		args: {
-			import_file: frm.doc.import_file,
-		},
+		method:
+			'vsd_jan_integration.vsd_jan_international_customization.doctype.import_file_cost_voucher.import_file_cost_voucher.load_from_import_file',
+		args: { import_file: frm.doc.import_file },
 		freeze: true,
 		freeze_message: __('Loading vehicles and posted expenses...'),
 		callback(r) {
-			if (!r.message) return;
-
-			frm.clear_table('vehicles');
-			(r.message.vehicles || []).forEach(v => {
-				const child = frm.add_child('vehicles');
-				Object.keys(v).forEach(k => {
-					child[k] = v[k];
-				});
-			});
-
-			frm.clear_table('expenses');
-			(r.message.expenses || []).forEach(e => {
-				const child = frm.add_child('expenses');
-				Object.keys(e).forEach(k => {
-					child[k] = e[k];
-				});
-			});
-
-			frm.clear_table('allocations');
-			frm.refresh_fields(['vehicles', 'expenses', 'allocations']);
-
-			const vCount = (r.message.vehicles || []).length;
-			const eCount = (r.message.expenses || []).length;
-			frappe.show_alert({
-				message: __('Loaded {0} vehicles and {1} expense lines', [vCount, eCount]),
-				indicator: vCount || eCount ? 'green' : 'orange',
-			});
+			applyLoadFromImportFileResult(frm, r.message);
+			frm.save();
 		},
 	});
 }
@@ -566,6 +586,7 @@ function vehicleOptionLabel(v) {
 function methodPillClass(method) {
 	if (method === 'By BL M3') return 'ifcv-vs__pill ifcv-vs__pill--m3';
 	if (method === 'By Vehicle Manual') return 'ifcv-vs__pill ifcv-vs__pill--manual';
+	if (method === 'By Formula') return 'ifcv-vs__pill ifcv-vs__pill--formula';
 	return 'ifcv-vs__pill';
 }
 
@@ -573,6 +594,7 @@ function shortMethod(method) {
 	if (method === 'By BL Equal') return __('Equal');
 	if (method === 'By BL M3') return __('M3');
 	if (method === 'By Vehicle Manual') return __('Manual');
+	if (method === 'By Formula') return __('Formula');
 	return method || '—';
 }
 

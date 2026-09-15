@@ -12,3 +12,5 @@ vsd_jan_integration.patches.rename_item_price_to_purchase_price
 vsd_jan_integration.patches.ensure_journal_entry_item_fields
 vsd_jan_integration.patches.backfill_je_item_from_chassis
 vsd_jan_integration.patches.seed_costing_from_tax_accounts
+
+vsd_jan_integration.patches.fix_other_payable_accounts

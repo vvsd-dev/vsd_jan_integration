@@ -935,6 +935,10 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	payable_acc = get_supplier_payable_account(supplier_name, company, supplier_currency)
 	# Do not seed Currency Exchange at 1.0 — use real rates like a manual Purchase Invoice
 	_ensure_supplier_exchange_rate(supplier_currency, company_currency)
+	# One FX lookup for the whole MKT run (all invoices share supplier currency)
+	cached_conversion_rate = _pi_conversion_rate(
+		supplier_currency, company_currency, frappe.utils.today()
+	)
 
 	# Bulk pre-fetch item chassis mappings in 1 query
 	try:
@@ -948,36 +952,68 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	except Exception:
 		pass
 
-	# Bulk pre-fetch existing Purchase Invoices by bill_no
+	# Prefetch only invoices in this file (not the whole PI/JV tables)
+	inv_keys = [str(k).strip() for k in invoice_cars_map.keys() if k]
 	existing_pi_map = {}
 	try:
-		pi_records = frappe.db.get_all("Purchase Invoice", filters={"docstatus": ["!=", 2]}, fields=["bill_no", "name"])
-		for r in pi_records:
-			if r.bill_no:
-				existing_pi_map[str(r.bill_no).strip()] = r.name
+		for chunk_start in range(0, len(inv_keys), 200):
+			chunk = inv_keys[chunk_start : chunk_start + 200]
+			for r in frappe.db.get_all(
+				"Purchase Invoice",
+				filters={"bill_no": ["in", chunk], "docstatus": ["!=", 2]},
+				fields=["bill_no", "name"],
+			):
+				if r.bill_no:
+					existing_pi_map[str(r.bill_no).strip()] = r.name
 	except Exception:
 		pass
 
-	# Bulk pre-fetch existing Journal Entries by cheque_no
 	existing_jv_map = {}
 	try:
-		jv_records = frappe.db.get_all("Journal Entry", filters={"docstatus": ["!=", 2]}, fields=["cheque_no", "name"])
-		for r in jv_records:
-			if r.cheque_no:
-				existing_jv_map[str(r.cheque_no).strip()] = r.name
+		for chunk_start in range(0, len(inv_keys), 200):
+			chunk = inv_keys[chunk_start : chunk_start + 200]
+			for r in frappe.db.get_all(
+				"Journal Entry",
+				filters={"cheque_no": ["in", chunk], "docstatus": ["!=", 2]},
+				fields=["cheque_no", "name"],
+			):
+				if r.cheque_no:
+					existing_jv_map[str(r.cheque_no).strip()] = r.name
 	except Exception:
 		pass
 
-	# Bulk pre-fetch existing Import Files by import_file_number and name
+	# Prefetch Import Files by invoice / BL keys used in this run
 	existing_import_file_map = {}
 	try:
 		if frappe.db.exists("DocType", "Import File"):
-			if_records = frappe.db.get_all("Import File", fields=["import_file_number", "name"])
-			for r in if_records:
-				if r.import_file_number:
-					existing_import_file_map[str(r.import_file_number).strip()] = r.name
-				if r.name:
-					existing_import_file_map[str(r.name).strip()] = r.name
+			bl_keys = []
+			for inv_no, cars in invoice_cars_map.items():
+				info = invoice_info.get(inv_no, {}) or invoice_info.get(normalize_inv_no(inv_no), {})
+				bl_sw = info.get("bl_sw") or next((c.get("bl_sw") for c in cars if c.get("bl_sw")), "")
+				for key in (inv_no, bl_sw, compute_import_file_number(inv_no, bl_sw, import_file_number_format)):
+					if key:
+						bl_keys.append(str(key).strip())
+			bl_keys = list(dict.fromkeys(bl_keys))
+			for chunk_start in range(0, len(bl_keys), 200):
+				chunk = bl_keys[chunk_start : chunk_start + 200]
+				for r in frappe.db.get_all(
+					"Import File",
+					filters={"import_file_number": ["in", chunk]},
+					fields=["import_file_number", "name"],
+				):
+					if r.import_file_number:
+						existing_import_file_map[str(r.import_file_number).strip()] = r.name
+					if r.name:
+						existing_import_file_map[str(r.name).strip()] = r.name
+				for r in frappe.db.get_all(
+					"Import File",
+					filters={"name": ["in", chunk]},
+					fields=["import_file_number", "name"],
+				):
+					if r.import_file_number:
+						existing_import_file_map[str(r.import_file_number).strip()] = r.name
+					if r.name:
+						existing_import_file_map[str(r.name).strip()] = r.name
 	except Exception:
 		pass
 
@@ -986,7 +1022,20 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	has_pi_custom_container_breakdown = pi_meta.has_field("custom_container_breakdown")
 	has_pi_import_file = pi_meta.has_field("import_file") or pi_meta.has_field("custom_import_file")
 
+	# Warm tax-account cache once for all MKT charge labels
+	for _fn, charge_label in EXPENSE_FIELDS:
+		get_tax_expense_account(company, charge_label, supplier_currency, cache=tax_account_cache)
+
+	default_warehouse = (
+		frappe.db.get_value("Stock Settings", None, "default_warehouse")
+		or frappe.db.get_value(
+			"Warehouse", {"company": company, "is_group": 0}, "name", order_by="creation asc"
+		)
+	)
+
 	processed_count = 0
+	prev_in_import = getattr(frappe.flags, "in_import", False)
+	frappe.flags.in_import = True
 
 	for inv_no, cars in invoice_cars_map.items():
 		processed_count += 1
@@ -1037,8 +1086,8 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			continue
 
 		try:
-			# Persist progress often enough that a page reload still shows counters
-			if docname and (processed_count == 1 or processed_count % 5 == 0 or processed_count == total_invoices):
+			# Persist progress: realtime always; DB write sparsely (was every 5 → slow)
+			if docname and (processed_count == 1 or processed_count % 25 == 0 or processed_count == total_invoices):
 				publish_import_progress(
 					docname,
 					processed_invoices=processed_count,
@@ -1052,10 +1101,61 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 					auto_submit_jv=auto_submit_jv,
 					create_lcv=create_lcv,
 					status="In Progress",
-					update_db=True,
+					update_db=(processed_count % 50 == 0 or processed_count == total_invoices),
 				)
 
 			if existing_pi:
+				existing_ds = frappe.db.get_value("Purchase Invoice", existing_pi, "docstatus")
+				if existing_ds and int(existing_ds) != 0:
+					# Submitted/cancelled — do not rebuild; only ensure Import File + expense JE links
+					import_file_doc, is_new_if = create_or_update_import_file(
+						inv_no=inv_no,
+						bl_sw=bl_sw,
+						supplier_name=supplier_name,
+						currency=supplier_currency or "JPY",
+						invoice_amount=sum(c.get("car_price", 0.0) for c in valid_car_items),
+						conts=conts,
+						format_option=import_file_number_format,
+						existing_import_file_map=existing_import_file_map,
+					)
+					if import_file_doc:
+						if is_new_if:
+							created_if += 1
+						else:
+							updated_if += 1
+						if has_pi_import_file:
+							update_doc_import_file_link(
+								"Purchase Invoice", existing_pi, import_file_doc.name
+							)
+					pi_doc = frappe.get_doc("Purchase Invoice", existing_pi)
+					updated_pi += 1
+					created_pi_logs.append(
+						f"Skipped rebuild of submitted Purchase Invoice '{existing_pi}' "
+						f"for Supplier Invoice No: {inv_no}"
+					)
+					jv_doc, is_new_jv = create_or_update_expense_journal_entry(
+						pi_doc=pi_doc,
+						inv_no=inv_no,
+						inv_date=inv_date,
+						bl_sw=bl_sw,
+						conts=conts,
+						expense_fields=EXPENSE_FIELDS,
+						auto_submit_jv=auto_submit_jv,
+						existing_jv_map=existing_jv_map,
+						import_file_name=(import_file_doc.name if import_file_doc else None),
+						tax_account_cache=tax_account_cache,
+						supplier_payable_acc=payable_acc,
+						company_currency=company_currency,
+					)
+					if jv_doc:
+						if is_new_jv:
+							created_jv += 1
+						else:
+							updated_jv += 1
+					if processed_count % 50 == 0:
+						frappe.db.commit()
+					continue
+
 				pi_doc = frappe.get_doc("Purchase Invoice", existing_pi)
 				is_new_pi = False
 			else:
@@ -1070,10 +1170,12 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				pi_doc.posting_date = pi_doc.bill_date
 				if payable_acc:
 					pi_doc.credit_to = payable_acc
-				pi_doc.conversion_rate = _pi_conversion_rate(
+				pi_doc.conversion_rate = cached_conversion_rate or _pi_conversion_rate(
 					pi_doc.currency, company_currency, pi_doc.posting_date
 				)
 				pi_doc.update_stock = 1
+				if default_warehouse and hasattr(pi_doc, "set_warehouse"):
+					pi_doc.set_warehouse = default_warehouse
 
 			if has_pi_custom_bl_sw:
 				pi_doc.custom_bl_sw = bl_sw
@@ -1160,11 +1262,16 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				pi_doc.flags.ignore_mandatory = True
 				pi_doc.flags.ignore_links = True
 				pi_doc.flags.ignore_permissions = True
+				pi_doc.flags.ignore_pricing_rule = True
+				# Stock valuation / tax engines dominate MKT runtime — keep validate for stock
+				# but mute non-critical checks
+				frappe.flags.mute_messages = True
 				if is_new_pi:
 					pi_doc.insert(ignore_permissions=True)
 					existing_pi_map[inv_no] = pi_doc.name
 				else:
 					pi_doc.save(ignore_permissions=True)
+				frappe.flags.mute_messages = False
 
 				if auto_submit_pi:
 					pi_doc.flags.ignore_mandatory = True
@@ -1215,7 +1322,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 						created_lcv += 1
 						created_pi_logs.append(f"  - Created Landed Cost Voucher '{lcv.name}' for Purchase Invoice '{pi_doc.name}'")
 
-			if processed_count % 25 == 0:
+			if processed_count % 50 == 0:
 				frappe.db.commit()
 
 		except Exception as exc:
@@ -1228,6 +1335,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			frappe.log_error(title=f"Error processing Purchase Invoice for {inv_no}", message=frappe.get_traceback())
 
 	frappe.db.commit()
+	frappe.flags.in_import = prev_in_import
 
 	all_conts = [c for conts_list in invoice_containers_map.values() for c in conts_list]
 	all_cars = [c for cars_list in invoice_cars_map.values() for c in cars_list]
@@ -1477,6 +1585,11 @@ def create_or_update_expense_journal_entry(
 		jv_doc = frappe.new_doc("Journal Entry")
 		jv_doc.voucher_type = "Journal Entry"
 		jv_doc.company = company
+		# Deterministic name — avoids ACC-JV series lock during bulk MKT
+		import hashlib
+
+		digest = hashlib.md5(f"MKT|{inv_no}|{company}".encode()).hexdigest()[:12].upper()
+		jv_doc.name = f"MKTJV-{digest}"
 		is_new = True
 
 	jv_date = format_date(inv_date) or pi_doc.posting_date or frappe.utils.today()
@@ -1494,6 +1607,7 @@ def create_or_update_expense_journal_entry(
 	jv_doc.accounts = []
 	total_debit = 0.0
 	has_multi_curr = (currency != comp_curr)
+	cost_center = get_company_cost_center(company)
 
 	for fieldname, charge_label in expense_fields:
 		amt = sum(c.get(fieldname, 0.0) for c in conts)
@@ -1511,6 +1625,7 @@ def create_or_update_expense_journal_entry(
 				"debit": base_amt,
 				"account_currency": acc_curr,
 				"exchange_rate": rate,
+				"cost_center": cost_center,
 				"description": charge_label,
 			})
 			total_debit += amt
@@ -1528,6 +1643,7 @@ def create_or_update_expense_journal_entry(
 			"credit": base_credit,
 			"account_currency": acc_curr,
 			"exchange_rate": rate,
+			"cost_center": cost_center,
 			"description": f"Payable for expense charges on Invoice {inv_no}",
 		})
 
@@ -1538,7 +1654,22 @@ def create_or_update_expense_journal_entry(
 		jv_doc.flags.ignore_validate = True
 
 		if is_new:
-			jv_doc.insert(ignore_permissions=True)
+			try:
+				jv_doc.insert(ignore_permissions=True, set_name=jv_doc.name)
+			except TypeError:
+				jv_doc.insert(ignore_permissions=True)
+			except frappe.DuplicateEntryError:
+				# Race / re-import — fall back to existing by cheque_no
+				existing = frappe.db.get_value(
+					"Journal Entry",
+					{"cheque_no": str(inv_no), "company": company, "docstatus": ["!=", 2]},
+					"name",
+				)
+				if existing:
+					jv_doc = frappe.get_doc("Journal Entry", existing)
+					is_new = False
+				else:
+					raise
 			if existing_jv_map is not None:
 				existing_jv_map[str(inv_no)] = jv_doc.name
 		else:
@@ -1839,38 +1970,60 @@ def create_or_update_import_file(
 
 	is_new = False
 	if existing_name:
-		doc = frappe.get_doc("Import File", existing_name)
+		# Fast path: patch fields without full Document load/save cycle
+		updates = {
+			"bl_number": bl_sw or "",
+			"supplier_name": supplier_name or "JAN JAPAN",
+			"supplier_invoice_no": str(inv_no),
+			"invoice_currency": currency or "JPY",
+			"invoice_amount": frappe.utils.flt(invoice_amount),
+		}
+		if conts:
+			distinct_conts = [
+				c.get("container_no")
+				for c in conts
+				if c.get("container_no")
+				and not c.get("is_roro")
+				and str(c.get("container_no", "")).lower()
+				not in ("inv other charges", "inv. other charges", "other charges", "unassigned")
+			]
+			container_count = len(set(distinct_conts))
+			updates["no_of_containers"] = str(container_count) if container_count > 0 else ""
+		else:
+			updates["no_of_containers"] = ""
+
+		for field, value in updates.items():
+			frappe.db.set_value("Import File", existing_name, field, value, update_modified=False)
+		doc = frappe._dict(name=existing_name, **updates)
 	else:
 		doc = frappe.new_doc("Import File")
 		doc.import_file_number = import_file_number
 		is_new = True
 
-	doc.bl_number = bl_sw or ""
-	doc.supplier_name = supplier_name or "JAN JAPAN"
-	doc.supplier_invoice_no = str(inv_no)
-	doc.invoice_currency = currency or "JPY"
-	doc.invoice_amount = frappe.utils.flt(invoice_amount)
+		doc.bl_number = bl_sw or ""
+		doc.supplier_name = supplier_name or "JAN JAPAN"
+		doc.supplier_invoice_no = str(inv_no)
+		doc.invoice_currency = currency or "JPY"
+		doc.invoice_amount = frappe.utils.flt(invoice_amount)
 
-	if conts:
-		distinct_conts = [
-			c.get("container_no")
-			for c in conts
-			if c.get("container_no")
-			and not c.get("is_roro")
-			and str(c.get("container_no", "")).lower() not in ("inv other charges", "inv. other charges", "other charges", "unassigned")
-		]
-		container_count = len(set(distinct_conts))
-		doc.no_of_containers = str(container_count) if container_count > 0 else ""
-	else:
-		doc.no_of_containers = ""
+		if conts:
+			distinct_conts = [
+				c.get("container_no")
+				for c in conts
+				if c.get("container_no")
+				and not c.get("is_roro")
+				and str(c.get("container_no", "")).lower()
+				not in ("inv other charges", "inv. other charges", "other charges", "unassigned")
+			]
+			container_count = len(set(distinct_conts))
+			doc.no_of_containers = str(container_count) if container_count > 0 else ""
+		else:
+			doc.no_of_containers = ""
 
-	doc.flags.ignore_mandatory = True
-	doc.flags.ignore_links = True
-	doc.flags.ignore_permissions = True
-	if is_new:
+		doc.flags.ignore_mandatory = True
+		doc.flags.ignore_links = True
+		doc.flags.ignore_permissions = True
 		doc.insert(ignore_permissions=True)
-	else:
-		doc.save(ignore_permissions=True)
 
 	if existing_import_file_map is not None:
 		existing_import_file_map[str(import_file_number).strip()] = doc.name

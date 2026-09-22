@@ -12,8 +12,11 @@
   "purchase_price",
   "purchase_currency",
   "exchange_rate",
+  "usd_exchange_rate",
   "purchase_amount_company",
-  "applicable_charges"
+  "applicable_charges",
+  "applicable_charges_usd",
+  "applicable_charges_yen"
  ],
  "fields": [
   {
@@ -36,7 +39,6 @@
    "fetch_from": "item.custom_maker",
    "fieldname": "maker",
    "fieldtype": "Data",
-   "in_list_view": 1,
    "label": "Maker",
    "read_only": 1
   },
@@ -44,7 +46,6 @@
    "fetch_from": "item.custom_m3",
    "fieldname": "m3",
    "fieldtype": "Float",
-   "in_list_view": 1,
    "label": "M3"
   },
   {
@@ -57,7 +58,7 @@
   {
    "fieldname": "purchase_price",
    "fieldtype": "Currency",
-   "in_list_view": 1,
+   "hidden": 1,
    "label": "Purchase Price",
    "options": "purchase_currency",
    "read_only": 1
@@ -65,33 +66,62 @@
   {
    "fieldname": "purchase_currency",
    "fieldtype": "Link",
+   "hidden": 1,
    "label": "Purchase Currency",
    "options": "Currency",
    "read_only": 1
   },
   {
-   "description": "From submitted Purchase Invoice (conversion_rate).",
+   "description": "Purchase currency → company (from Purchase Invoice conversion_rate).",
    "fieldname": "exchange_rate",
    "fieldtype": "Float",
-   "in_list_view": 1,
-   "label": "Exchange Rate",
+   "hidden": 1,
+   "label": "Purchase Exchange Rate",
    "precision": "9",
    "read_only": 1
   },
   {
-   "description": "Purchase Price × Exchange Rate (company currency).",
-   "fieldname": "purchase_amount_company",
-   "fieldtype": "Currency",
-   "in_list_view": 1,
-   "label": "Purchase (Company)",
+   "fieldname": "usd_exchange_rate",
+   "fieldtype": "Float",
+   "hidden": 1,
+   "label": "USD Exchange Rate (deprecated)",
+   "precision": "9",
    "read_only": 1
   },
   {
-   "description": "Sum of Mapped Vehicle Allocations for this car in company currency — feeds Landed Cost Voucher Applicable Charges.",
+   "description": "Company amount with purchase currency shown in grid sub-line.",
+   "fieldname": "purchase_amount_company",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Purchase",
+   "options": "company_currency",
+   "read_only": 1
+  },
+  {
+   "description": "Sum of mapped allocations in company currency.",
    "fieldname": "applicable_charges",
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Applicable Charges",
+   "options": "company_currency",
+   "read_only": 1
+  },
+  {
+   "description": "Applicable charges converted using voucher Company / USD rate.",
+   "fieldname": "applicable_charges_usd",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Applicable Charges (USD)",
+   "options": "usd_currency",
+   "read_only": 1
+  },
+  {
+   "description": "Applicable charges converted using purchase JPY rate (PI conversion_rate).",
+   "fieldname": "applicable_charges_yen",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Applicable Charges (JPY)",
+   "options": "jpy_currency",
    "read_only": 1
   }
  ],

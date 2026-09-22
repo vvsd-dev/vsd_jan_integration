@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "creation": "2026-09-15 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "valuation_section",
+  "create_landed_cost_voucher"
+ ],
+ "fields": [
+  {
+   "fieldname": "valuation_section",
+   "fieldtype": "Section Break",
+   "label": "Import File Cost Voucher Valuation"
+  },
+  {
+   "default": "1",
+   "description": "When ticked, submitting an Import File Cost Voucher creates one Landed Cost Voucher per expense account (Distribute Manually) using IFCV per-car allocations. When unticked, IFCV itself updates stock valuation and GL on the Purchase Invoice — same economics, no LCV document.",
+   "fieldname": "create_landed_cost_voucher",
+   "fieldtype": "Check",
+   "label": "Create Landed Cost Voucher on IFCV Submit"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-16 10:00:00.000000",
+ "module": "VSD Jan International Customization",
+ "name": "Costing Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

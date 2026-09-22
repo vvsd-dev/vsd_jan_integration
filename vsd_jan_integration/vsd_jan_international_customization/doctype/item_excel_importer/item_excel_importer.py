@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import datetime
+import hashlib
 import json
 import os
 import time
@@ -61,12 +62,14 @@ def enqueue_import(docname, retry_failed_only=False):
 		update_db=True,
 	)
 
+	# long queue: 250 PIs+JEs takes several minutes and must not compete with
+	# every site's scheduled jobs on the shared default worker.
 	frappe.enqueue(
 		"vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.run_import_job",
 		docname=docname,
 		retry_failed_only=retry_failed_only,
-		queue="default",
-		timeout=3600,
+		queue="long",
+		timeout=7200,
 	)
 
 	return {
@@ -90,7 +93,7 @@ def run_import_job(docname, retry_failed_only=False):
 		else:
 			detected_format = selected_type
 
-		create_lcv = bool(importer.get("create_lcv"))
+		create_ifcv = bool(importer.get("create_ifcv"))
 		auto_submit_pi = bool(importer.get("auto_submit_purchase_invoice"))
 		auto_submit_jv = bool(importer.get("auto_submit_journal_entry"))
 		import_file_number_format = importer.get("import_file_number_format") or "Invoice No"
@@ -104,7 +107,7 @@ def run_import_job(docname, retry_failed_only=False):
 		if detected_format == "MKT Statement":
 			res = process_mkt_statement(
 				file_path,
-				create_lcv=create_lcv,
+				create_ifcv=create_ifcv,
 				auto_submit_pi=auto_submit_pi,
 				auto_submit_jv=auto_submit_jv,
 				retry_failed_only=retry_failed_only,
@@ -212,13 +215,13 @@ def calculate_estimated_seconds(
 	import_type="MKT Statement",
 	auto_submit_pi=False,
 	auto_submit_jv=False,
-	create_lcv=False,
+	create_ifcv=False,
 ):
 	if import_type == "Mukechi":
 		inv_w = 0.0
 		car_w = 0.008
 	else:
-		inv_w = 0.18 + (0.05 if auto_submit_pi else 0.0) + (0.03 if auto_submit_jv else 0.0) + (0.10 if create_lcv else 0.0)
+		inv_w = 0.18 + (0.05 if auto_submit_pi else 0.0) + (0.03 if auto_submit_jv else 0.0) + (0.10 if create_ifcv else 0.0)
 		car_w = 0.001
 
 	total_units = (total_invoices or 0) * inv_w + (total_cars or 0) * car_w
@@ -256,7 +259,7 @@ def publish_import_progress(
 	import_type="MKT Statement",
 	auto_submit_pi=False,
 	auto_submit_jv=False,
-	create_lcv=False,
+	create_ifcv=False,
 ):
 	if start_time:
 		elapsed_secs = max(0.0, round(time.time() - start_time, 2))
@@ -278,7 +281,7 @@ def publish_import_progress(
 		import_type=import_type,
 		auto_submit_pi=auto_submit_pi,
 		auto_submit_jv=auto_submit_jv,
-		create_lcv=create_lcv,
+		create_ifcv=create_ifcv,
 	)
 
 	is_done = status in ["Completed", "Completed with Errors", "Failed"]
@@ -289,7 +292,7 @@ def publish_import_progress(
 		formatted_rem = "0s"
 	else:
 		# Weighted progress percent calculation
-		inv_w = 0.18 + (0.05 if auto_submit_pi else 0.0) + (0.03 if auto_submit_jv else 0.0) + (0.10 if create_lcv else 0.0) if import_type != "Mukechi" else 0.0
+		inv_w = 0.18 + (0.05 if auto_submit_pi else 0.0) + (0.03 if auto_submit_jv else 0.0) + (0.10 if create_ifcv else 0.0) if import_type != "Mukechi" else 0.0
 		car_w = 0.001 if import_type != "Mukechi" else 0.008
 		total_w = (total_invoices or 0) * inv_w + (total_cars or 0) * car_w
 		done_w = (processed_invoices or 0) * inv_w + (processed_cars or 0) * car_w
@@ -670,7 +673,7 @@ EXPENSE_FIELDS = [
 ]
 
 
-def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, auto_submit_jv=False, retry_failed_only=False, prev_failed_records=None, docname=None, import_file_number_format="Invoice No"):
+def process_mkt_statement(file_path, create_ifcv=False, auto_submit_pi=False, auto_submit_jv=False, retry_failed_only=False, prev_failed_records=None, docname=None, import_file_number_format="Invoice No"):
 	start_time = time.time()
 
 	# Avoid full doctype cache clears — they stall the first invoice for seconds.
@@ -680,7 +683,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 	try:
 		return _process_mkt_statement_inner(
 			file_path=file_path,
-			create_lcv=create_lcv,
+			create_ifcv=create_ifcv,
 			auto_submit_pi=auto_submit_pi,
 			auto_submit_jv=auto_submit_jv,
 			retry_failed_only=retry_failed_only,
@@ -695,7 +698,7 @@ def process_mkt_statement(file_path, create_lcv=False, auto_submit_pi=False, aut
 
 def _process_mkt_statement_inner(
 	file_path,
-	create_lcv=False,
+	create_ifcv=False,
 	auto_submit_pi=False,
 	auto_submit_jv=False,
 	retry_failed_only=False,
@@ -779,7 +782,7 @@ def _process_mkt_statement_inner(
 				import_type="MKT Statement",
 				auto_submit_pi=auto_submit_pi,
 				auto_submit_jv=auto_submit_jv,
-				create_lcv=create_lcv,
+				create_ifcv=create_ifcv,
 			)
 			frappe.db.set_value(
 				"Item Excel Importer",
@@ -805,7 +808,7 @@ def _process_mkt_statement_inner(
 				import_type="MKT Statement",
 				auto_submit_pi=auto_submit_pi,
 				auto_submit_jv=auto_submit_jv,
-				create_lcv=create_lcv,
+				create_ifcv=create_ifcv,
 				status="In Progress",
 				update_db=True,
 			)
@@ -817,7 +820,7 @@ def _process_mkt_statement_inner(
 		invoice_cars_map=invoice_cars_map,
 		invoice_containers_map=invoice_containers_map,
 		invoice_info=invoice_info,
-		create_lcv=create_lcv,
+		create_ifcv=create_ifcv,
 		auto_submit_pi=auto_submit_pi,
 		auto_submit_jv=auto_submit_jv,
 		total_invoices=total_invoices,
@@ -849,7 +852,7 @@ def _process_mkt_statement_inner(
 	updated_if = inv_res.get("updated_import_files", 0)
 	created_jv = inv_res["created_jv"]
 	updated_jv = inv_res["updated_jv"]
-	created_lcv = inv_res["created_lcv"]
+	created_ifcv = inv_res["created_ifcv"]
 	error_count = inv_res["errors"] + car_res["errors"]
 
 	total_container_full = inv_res.get("container_full_count", 0)
@@ -874,14 +877,14 @@ def _process_mkt_statement_inner(
 		all_logs.append("")
 
 	summary = (
-		f"Detected Format: MKT Statement (Create LCV: {'Yes' if create_lcv else 'No'})\n"
+		f"Detected Format: MKT Statement (Create IFCV: {'Yes' if create_ifcv else 'No'})\n"
 		f"Breakdown Summary:\n"
 		f"  - Container Full Invoices: {total_container_full} | Container Cars: {total_container_cars}\n"
 		f"  - RORO Full Invoices: {total_roro_full} | RORO Cars: {total_roro_cars}\n"
 		f"  - Purchase Invoices Created: {created_pi} | Updated: {updated_pi}\n"
 		f"  - Import Files Created: {created_if} | Updated: {updated_if}\n"
 		f"  - Journal Entries Created: {created_jv} | Updated: {updated_jv}\n"
-		f"  - Landed Cost Vouchers: {created_lcv}\n"
+		f"  - Import File Cost Vouchers: {created_ifcv}\n"
 		f"  - Time Elapsed: {time_elapsed_str}\n"
 		f"  - Errors / Skipped: {error_count}\n\n"
 		+ "\n".join(all_logs)
@@ -898,7 +901,7 @@ def _process_mkt_statement_inner(
 		"updated_import_files": updated_if,
 		"created_jv": created_jv,
 		"updated_jv": updated_jv,
-		"created_lcv": created_lcv,
+		"created_ifcv": created_ifcv,
 		"updated_items": car_res["updated_items"],
 		"errors": error_count,
 		"summary": summary,
@@ -913,7 +916,7 @@ def _process_mkt_statement_inner(
 # SCHEDULER / WORKER 1: INVOICES & JOURNAL ENTRIES
 # ==========================================
 
-def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_lcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No", total_cars=0):
+def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_ifcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No", total_cars=0):
 	supplier_name = ensure_supplier("JAN JAPAN")
 	created_pi_logs = []
 	not_created_pi_logs = []
@@ -923,7 +926,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	updated_if = 0
 	created_jv = 0
 	updated_jv = 0
-	created_lcv = 0
+	created_ifcv = 0
 	error_count = 0
 	failed_records = []
 	chassis_cache = {}
@@ -940,15 +943,14 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 		supplier_currency, company_currency, frappe.utils.today()
 	)
 
-	# Bulk pre-fetch item chassis mappings in 1 query
+	# Prefetch Item map for chassis in this file only (not entire Item table)
 	try:
-		item_list = frappe.db.get_all("Item", fields=["name", "custom_chassis_no", "item_name"])
-		for it in item_list:
-			if it.custom_chassis_no:
-				chassis_cache[str(it.custom_chassis_no).strip()] = it.name
-			chassis_cache[str(it.name).strip()] = it.name
-			if it.item_name:
-				chassis_cache[str(it.item_name).strip()] = it.name
+		needed = []
+		for cars in invoice_cars_map.values():
+			for c in cars or []:
+				if c.get("chassis_no"):
+					needed.append(c["chassis_no"])
+		chassis_cache.update(_prefetch_chassis_item_cache(needed))
 	except Exception:
 		pass
 
@@ -1032,6 +1034,13 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			"Warehouse", {"company": company, "is_group": 0}, "name", order_by="creation asc"
 		)
 	)
+	# Cached once — used for fast PI inserts (ignore_validate path)
+	pi_cost_center = get_company_cost_center(company)
+	pi_stock_expense_account = (
+		frappe.db.get_value("Company", company, "stock_received_but_not_billed")
+		or frappe.db.get_value("Company", company, "default_inventory_account")
+		or frappe.db.get_value("Company", company, "default_expense_account")
+	)
 
 	processed_count = 0
 	prev_in_import = getattr(frappe.flags, "in_import", False)
@@ -1087,7 +1096,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 
 		try:
 			# Persist progress: realtime always; DB write sparsely (was every 5 → slow)
-			if docname and (processed_count == 1 or processed_count % 25 == 0 or processed_count == total_invoices):
+			if docname and (processed_count == 1 or processed_count % 10 == 0 or processed_count == total_invoices):
 				publish_import_progress(
 					docname,
 					processed_invoices=processed_count,
@@ -1099,7 +1108,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 					import_type="MKT Statement",
 					auto_submit_pi=auto_submit_pi,
 					auto_submit_jv=auto_submit_jv,
-					create_lcv=create_lcv,
+					create_ifcv=create_ifcv,
 					status="In Progress",
 					update_db=(processed_count % 50 == 0 or processed_count == total_invoices),
 				)
@@ -1152,7 +1161,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 							created_jv += 1
 						else:
 							updated_jv += 1
-					if processed_count % 50 == 0:
+					if processed_count % 100 == 0:
 						frappe.db.commit()
 					continue
 
@@ -1186,6 +1195,9 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 					"item_code": car["item_code"],
 					"qty": 1,
 					"rate": car["car_price"],
+					"warehouse": default_warehouse,
+					"expense_account": pi_stock_expense_account,
+					"cost_center": pi_cost_center,
 				})
 				item_row.custom_container_no = car.get("container_no") or ("RORO" if car.get("is_roro") else "")
 				item_row.custom_blsw = bl_sw
@@ -1251,10 +1263,10 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			if import_file_doc:
 				if is_new_if:
 					created_if += 1
-					created_pi_logs.append(f"  - Created Import File '{import_file_doc.name}'")
+					if created_if <= 10 or created_if % 50 == 0:
+						created_pi_logs.append(f"  - Created Import File '{import_file_doc.name}'")
 				else:
 					updated_if += 1
-					created_pi_logs.append(f"  - Updated Import File '{import_file_doc.name}'")
 
 				link_import_file_to_doc(pi_doc, import_file_doc.name)
 
@@ -1263,17 +1275,36 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				pi_doc.flags.ignore_links = True
 				pi_doc.flags.ignore_permissions = True
 				pi_doc.flags.ignore_pricing_rule = True
-				# Stock valuation / tax engines dominate MKT runtime — keep validate for stock
-				# but mute non-critical checks
+				# Fast path: skip full validate on draft insert (~10x). Submit re-validates.
+				pi_doc.flags.ignore_validate = True
+				_mkt_apply_pi_fast_defaults(
+					pi_doc, default_warehouse, pi_stock_expense_account, pi_cost_center
+				)
 				frappe.flags.mute_messages = True
 				if is_new_pi:
-					pi_doc.insert(ignore_permissions=True)
+					pi_doc.name = _mkt_pi_deterministic_name(inv_no, company)
+					try:
+						pi_doc.insert(ignore_permissions=True, set_name=pi_doc.name)
+					except TypeError:
+						pi_doc.insert(ignore_permissions=True)
+					except frappe.DuplicateEntryError:
+						existing = frappe.db.get_value(
+							"Purchase Invoice",
+							{"bill_no": inv_no, "docstatus": ["!=", 2]},
+							"name",
+						)
+						if existing:
+							pi_doc = frappe.get_doc("Purchase Invoice", existing)
+							is_new_pi = False
+						else:
+							raise
 					existing_pi_map[inv_no] = pi_doc.name
 				else:
 					pi_doc.save(ignore_permissions=True)
 				frappe.flags.mute_messages = False
+				pi_doc.flags.ignore_validate = False
 
-				if auto_submit_pi:
+				if auto_submit_pi and pi_doc.docstatus == 0:
 					pi_doc.flags.ignore_mandatory = True
 					pi_doc.submit()
 
@@ -1283,10 +1314,16 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 			bl_sw_str = f" (BL/SW: {bl_sw})" if bl_sw else ""
 			if is_new_pi:
 				created_pi += 1
-				created_pi_logs.append(f"Created Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no}{bl_sw_str}")
+				if created_pi <= 20 or created_pi % 50 == 0:
+					created_pi_logs.append(
+						f"Created Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no}{bl_sw_str}"
+					)
 			else:
 				updated_pi += 1
-				created_pi_logs.append(f"Updated Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no}{bl_sw_str}")
+				if updated_pi <= 10 or updated_pi % 50 == 0:
+					created_pi_logs.append(
+						f"Updated Purchase Invoice '{pi_doc.name}' for Supplier Invoice No: {inv_no}{bl_sw_str}"
+					)
 
 			jv_doc, is_new_jv = create_or_update_expense_journal_entry(
 				pi_doc=pi_doc,
@@ -1301,28 +1338,40 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				tax_account_cache=tax_account_cache,
 				supplier_payable_acc=payable_acc,
 				company_currency=company_currency,
+				cost_center=pi_cost_center,
 			)
 
 			if jv_doc:
 				if is_new_jv:
 					created_jv += 1
-					created_pi_logs.append(f"  - Created Journal Entry '{jv_doc.name}' for Supplier Invoice No: {inv_no}")
+					if created_jv <= 10 or created_jv % 50 == 0:
+						created_pi_logs.append(
+							f"  - Created Journal Entry '{jv_doc.name}' for Supplier Invoice No: {inv_no}"
+						)
 				else:
 					updated_jv += 1
-					created_pi_logs.append(f"  - Updated Journal Entry '{jv_doc.name}' for Supplier Invoice No: {inv_no}")
 
-			if create_lcv:
+			if create_ifcv:
 				if pi_doc.docstatus == 0:
 					pi_doc.submit()
 					created_pi_logs.append(f"  - Submitted Purchase Invoice '{pi_doc.name}'")
-				total_charges = sum(sum(c.get(fn, 0.0) for fn in [f[0] for f in EXPENSE_FIELDS]) for c in conts)
-				if total_charges > 0:
-					lcv = create_or_update_lcv(pi_doc, conts, EXPENSE_FIELDS)
-					if lcv:
-						created_lcv += 1
-						created_pi_logs.append(f"  - Created Landed Cost Voucher '{lcv.name}' for Purchase Invoice '{pi_doc.name}'")
+				# IFCV expenses come from submitted JEs — submit draft expense JE if present
+				if jv_doc and jv_doc.docstatus == 0:
+					jv_doc.flags.ignore_mandatory = True
+					jv_doc.submit()
+					created_pi_logs.append(f"  - Submitted Journal Entry '{jv_doc.name}' for IFCV")
+				if import_file_doc:
+					ifcv = create_or_update_ifcv(
+						import_file_doc.name,
+						posting_date=pi_doc.posting_date or frappe.utils.today(),
+					)
+					if ifcv:
+						created_ifcv += 1
+						created_pi_logs.append(
+							f"  - Created Import File Cost Voucher '{ifcv.name}' for Import File '{import_file_doc.name}'"
+						)
 
-			if processed_count % 50 == 0:
+			if processed_count % 100 == 0:
 				frappe.db.commit()
 
 		except Exception as exc:
@@ -1364,7 +1413,7 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 		"updated_import_files": updated_if,
 		"created_jv": created_jv,
 		"updated_jv": updated_jv,
-		"created_lcv": created_lcv,
+		"created_ifcv": created_ifcv,
 		"errors": error_count,
 		"created_pi_logs": created_pi_logs,
 		"not_created_pi_logs": not_created_pi_logs,
@@ -1391,15 +1440,10 @@ def run_car_updating_job(docname, car_rows, invoice_info, invoice_containers_map
 	color_cache = {}
 	touched_item_codes = []
 
-	# Bulk pre-fetch item mappings into chassis_cache in 1 query
+	# Prefetch Item map for chassis in this file only
 	try:
-		item_list = frappe.db.get_all("Item", fields=["name", "custom_chassis_no", "item_name"])
-		for it in item_list:
-			if it.custom_chassis_no:
-				chassis_cache[str(it.custom_chassis_no).strip()] = it.name
-			chassis_cache[str(it.name).strip()] = it.name
-			if it.item_name:
-				chassis_cache[str(it.item_name).strip()] = it.name
+		needed = [c.get("chassis_no") for c in (car_rows or []) if c.get("chassis_no")]
+		chassis_cache.update(_prefetch_chassis_item_cache(needed))
 	except Exception:
 		pass
 
@@ -1557,6 +1601,7 @@ def create_or_update_expense_journal_entry(
 	tax_account_cache=None,
 	supplier_payable_acc=None,
 	company_currency=None,
+	cost_center=None,
 ):
 	if not conts or not pi_doc:
 		return None, False
@@ -1607,7 +1652,7 @@ def create_or_update_expense_journal_entry(
 	jv_doc.accounts = []
 	total_debit = 0.0
 	has_multi_curr = (currency != comp_curr)
-	cost_center = get_company_cost_center(company)
+	cost_center = cost_center or get_company_cost_center(company)
 
 	for fieldname, charge_label in expense_fields:
 		amt = sum(c.get(fieldname, 0.0) for c in conts)
@@ -1689,58 +1734,148 @@ def create_or_update_expense_journal_entry(
 
 
 
-def create_or_update_lcv(pi_doc, conts, expense_fields):
+
+def create_or_update_ifcv(import_file_name, posting_date=None):
+	"""Create or refresh a draft Import File Cost Voucher for the Import File.
+
+	Loads vehicles + posted expenses (submitted JE / non-stock PI lines) the same way
+	as Reload From Import File on the IFCV form. Does not submit — user reviews then submits.
+	"""
 	try:
-		lcv_name = frappe.db.get_value(
-			"Landed Cost Purchase Receipt",
-			{"receipt_document": pi_doc.name, "docstatus": ["!=", 2]},
-			"parent",
+		if not import_file_name:
+			return None
+		if not frappe.db.exists("DocType", "Import File Cost Voucher"):
+			return None
+		if not frappe.db.exists("Import File", import_file_name):
+			return None
+
+		from vsd_jan_integration.vsd_jan_international_customization.doctype.import_file_cost_voucher.import_file_cost_voucher import (
+			load_from_import_file,
 		)
-		if lcv_name:
-			lcv = frappe.get_doc("Landed Cost Voucher", lcv_name)
+
+		# Prefer existing draft; never overwrite a submitted IFCV
+		existing = frappe.db.get_value(
+			"Import File Cost Voucher",
+			{"import_file": import_file_name, "docstatus": 0},
+			"name",
+		)
+		if not existing:
+			submitted = frappe.db.get_value(
+				"Import File Cost Voucher",
+				{"import_file": import_file_name, "docstatus": 1},
+				"name",
+			)
+			if submitted:
+				return frappe.get_doc("Import File Cost Voucher", submitted)
+
+		if existing:
+			doc = frappe.get_doc("Import File Cost Voucher", existing)
 		else:
-			lcv = frappe.new_doc("Landed Cost Voucher")
-			lcv.company = pi_doc.company
-			lcv.distribute_charges_based_on = "Amount"
+			doc = frappe.new_doc("Import File Cost Voucher")
+			doc.import_file = import_file_name
+			doc.posting_date = posting_date or frappe.utils.today()
 
-		lcv.purchase_receipts = []
-		lcv.append("purchase_receipts", {
-			"receipt_document_type": "Purchase Invoice",
-			"receipt_document": pi_doc.name,
-			"grand_total": pi_doc.grand_total,
-		})
+		data = load_from_import_file(doc.import_file)
+		doc.set("vehicles", [])
+		doc.set("expenses", [])
+		doc.set("allocations", [])
+		for v in data.get("vehicles") or []:
+			doc.append("vehicles", v)
+		for e in data.get("expenses") or []:
+			doc.append("expenses", e)
 
-		lcv.taxes = []
-		for fieldname, charge_label in expense_fields:
-			amt = sum(c.get(fieldname, 0.0) for c in conts)
-			if amt > 0:
-				tax_account = get_tax_expense_account(pi_doc.company, charge_label, pi_doc.currency)
-				lcv.append("taxes", {
-					"expense_account": tax_account,
-					"description": charge_label,
-					"amount": amt,
-				})
-
-		cost_center = get_company_cost_center(pi_doc.company)
-		lcv.items = []
-		for item in pi_doc.items:
-			lcv.append("items", {
-				"receipt_document_type": "Purchase Invoice",
-				"receipt_document": pi_doc.name,
-				"item_code": item.item_code,
-				"description": item.description or item.item_name or item.item_code,
-				"qty": frappe.utils.flt(item.qty),
-				"rate": frappe.utils.flt(item.rate),
-				"amount": frappe.utils.flt(item.amount) or (frappe.utils.flt(item.qty) * frappe.utils.flt(item.rate)),
-				"cost_center": item.cost_center or cost_center,
-			})
-
-		lcv.flags.ignore_mandatory = True
-		lcv.save(ignore_permissions=True)
-		return lcv
-	except Exception as e:
-		frappe.log_error(title=f"Error creating Landed Cost Voucher for {pi_doc.name}", message=frappe.get_traceback())
+		doc._sync_expense_distribution_from_costing()
+		doc._distribute_allocations(keep_manual=False)
+		doc.total_expense_amount = sum(frappe.utils.flt(r.amount) for r in (doc.expenses or []))
+		doc.total_allocated_amount = sum(frappe.utils.flt(r.amount) for r in (doc.allocations or []))
+		doc.flags.ignore_permissions = True
+		doc.flags.ignore_mandatory = True
+		if existing:
+			doc.save(ignore_permissions=True)
+		else:
+			doc.insert(ignore_permissions=True)
+		return doc
+	except Exception:
+		frappe.log_error(
+			title=f"Error creating Import File Cost Voucher for {import_file_name}",
+			message=frappe.get_traceback(),
+		)
 		return None
+
+
+
+def _mkt_pi_deterministic_name(inv_no, company):
+	"""Stable PI name — avoids Series table lock during bulk MKT imports."""
+	digest = hashlib.md5(f"MKT|{inv_no}|{company}".encode()).hexdigest()[:12].upper()
+	return f"MKTPINV-{digest}"
+
+
+def _mkt_apply_pi_fast_defaults(pi_doc, warehouse, expense_account, cost_center):
+	"""Fill item/parent amounts so draft PIs are usable without full validate.
+
+	Used with flags.ignore_validate for ~10x faster bulk inserts. Submit still
+	runs full validation when auto_submit / create_ifcv requests it.
+	"""
+	rate = flt(pi_doc.conversion_rate) or 1.0
+	for it in pi_doc.items or []:
+		if warehouse and not it.warehouse:
+			it.warehouse = warehouse
+		if expense_account and not it.expense_account:
+			it.expense_account = expense_account
+		if cost_center and not it.cost_center:
+			it.cost_center = cost_center
+		qty = flt(it.qty) or 1.0
+		it.qty = qty
+		it.amount = flt(it.rate) * qty
+		it.base_rate = flt(it.rate) * rate
+		it.base_amount = flt(it.amount) * rate
+		if not it.uom:
+			it.uom = "Nos"
+		if not it.stock_uom:
+			it.stock_uom = it.uom
+		if not flt(it.conversion_factor):
+			it.conversion_factor = 1.0
+
+	pi_doc.net_total = sum(flt(i.amount) for i in (pi_doc.items or []))
+	pi_doc.base_net_total = sum(flt(i.base_amount) for i in (pi_doc.items or []))
+	pi_doc.total = pi_doc.net_total
+	pi_doc.base_total = pi_doc.base_net_total
+	pi_doc.grand_total = pi_doc.net_total
+	pi_doc.base_grand_total = pi_doc.base_net_total
+	pi_doc.outstanding_amount = pi_doc.grand_total
+	pi_doc.base_rounded_total = pi_doc.base_grand_total
+	pi_doc.rounded_total = pi_doc.grand_total
+
+
+def _prefetch_chassis_item_cache(chassis_nos):
+	"""Map chassis / item name → Item.name for only the chassis in this MKT file."""
+	cache = {}
+	keys = [str(c).strip() for c in (chassis_nos or []) if c]
+	if not keys:
+		return cache
+	# Exact chassis matches
+	for chunk_start in range(0, len(keys), 500):
+		chunk = keys[chunk_start : chunk_start + 500]
+		for it in frappe.db.get_all(
+			"Item",
+			filters={"custom_chassis_no": ["in", chunk]},
+			fields=["name", "custom_chassis_no", "item_name", "stock_uom"],
+		):
+			if it.custom_chassis_no:
+				cache[str(it.custom_chassis_no).strip()] = it.name
+			cache[str(it.name).strip()] = it.name
+			if it.item_name:
+				cache[str(it.item_name).strip()] = it.name
+		# Item name / code equals chassis
+		for it in frappe.db.get_all(
+			"Item",
+			filters={"name": ["in", chunk]},
+			fields=["name", "custom_chassis_no", "item_name"],
+		):
+			cache[str(it.name).strip()] = it.name
+			if it.custom_chassis_no:
+				cache[str(it.custom_chassis_no).strip()] = it.name
+	return cache
 
 
 def get_company_cost_center(company):
@@ -2619,7 +2754,13 @@ def format_date(val):
 
 @frappe.whitelist()
 def undo_import(docname):
-	"""Administrator-only: delete Items created by this import and reset to Pending."""
+	"""Administrator-only: reverse docs created by this import and reset to Pending.
+
+	MKT Statement: Purchase Invoices, Import Files, expense JEs (by invoice no from Excel),
+	plus Fixed Costing JEs / Car Costings for touched chassis.
+	Mukechi: Items logged as 'Created Item …' (and their CC / Fixed JEs).
+	Updated existing Items are never deleted.
+	"""
 	if frappe.session.user != "Administrator":
 		frappe.throw(_("Only Administrator can undo an import."), frappe.PermissionError)
 
@@ -2628,28 +2769,64 @@ def undo_import(docname):
 		_best_effort_cancel_import_jobs(docname)
 
 	created_items = _parse_created_items_from_log(importer.get("import_log") or "")
-	deleted_items = 0
-	deleted_cc = 0
-	deleted_je = 0
+	inv_nos, chassis_nos, import_file_keys = _collect_undo_targets_from_excel(importer)
+
+	# Also parse invoice nos / PI names from log if still present
+	log_invs, log_pis = _parse_mkt_docs_from_log(importer.get("import_log") or "")
+	inv_nos.update(log_invs)
+
+	deleted = {
+		"items": 0,
+		"car_costings": 0,
+		"journal_entries": 0,
+		"purchase_invoices": 0,
+		"import_files": 0,
+		"ifcvs": 0,
+	}
 	errors = []
 
 	prev_skip = frappe.flags.get("skip_fixed_costing_hooks")
 	frappe.flags.skip_fixed_costing_hooks = True
 	try:
-		for idx, item_code in enumerate(created_items, start=1):
+		# 1) IFCVs linked to Import Files for these invoices
+		deleted["ifcvs"] += _undo_delete_ifcvs(import_file_keys, errors)
+
+		# 2) Purchase Invoices by bill_no / known names
+		deleted["purchase_invoices"] += _undo_delete_purchase_invoices(inv_nos, log_pis, errors)
+
+		# 3) Expense JEs by cheque_no (= invoice no) and deterministic MKTJV names
+		deleted["journal_entries"] += _undo_delete_expense_jes(inv_nos, errors)
+
+		# 4) Import Files
+		deleted["import_files"] += _undo_delete_import_files(import_file_keys, errors)
+
+		# 5) Items created by Mukechi (from log) + Fixed JE / Car Costing for chassis in file
+		item_codes = list(created_items)
+		for chassis in chassis_nos:
+			item_name = find_item_by_chassis(chassis)
+			if item_name and item_name not in item_codes:
+				# Do not delete updated Items — only strip Fixed Costing artifacts
+				cc_n, je_n = _delete_item_import_artifacts(item_name)
+				deleted["car_costings"] += cc_n
+				deleted["journal_entries"] += je_n
+
+		for idx, item_code in enumerate(item_codes, start=1):
 			try:
 				cc_n, je_n = _delete_item_import_artifacts(item_code)
-				deleted_cc += cc_n
-				deleted_je += je_n
+				deleted["car_costings"] += cc_n
+				deleted["journal_entries"] += je_n
 				if frappe.db.exists("Item", item_code):
 					frappe.delete_doc("Item", item_code, force=1, ignore_permissions=True)
-					deleted_items += 1
+					deleted["items"] += 1
 				if idx % 40 == 0:
 					frappe.db.commit()
 			except Exception as exc:
 				errors.append(f"{item_code}: {exc}")
 				if len(errors) <= 25:
-					frappe.log_error(title=f"Undo Import delete failed: {item_code}", message=frappe.get_traceback())
+					frappe.log_error(
+						title=f"Undo Import delete failed: {item_code}",
+						message=frappe.get_traceback(),
+					)
 	finally:
 		frappe.flags.skip_fixed_costing_hooks = prev_skip
 
@@ -2681,18 +2858,222 @@ def undo_import(docname):
 		update_db=True,
 	)
 
-	summary = {
-		"deleted_items": deleted_items,
-		"deleted_car_costings": deleted_cc,
-		"deleted_journal_entries": deleted_je,
+	msg = _(
+		"Undo complete. Deleted {0} PI(s), {1} Import File(s), {2} JE(s), {3} IFCV(s), "
+		"{4} Item(s), {5} Car Costing(s). Status is Pending."
+	).format(
+		deleted["purchase_invoices"],
+		deleted["import_files"],
+		deleted["journal_entries"],
+		deleted["ifcvs"],
+		deleted["items"],
+		deleted["car_costings"],
+	)
+	return {
+		"deleted_items": deleted["items"],
+		"deleted_car_costings": deleted["car_costings"],
+		"deleted_journal_entries": deleted["journal_entries"],
+		"deleted_purchase_invoices": deleted["purchase_invoices"],
+		"deleted_import_files": deleted["import_files"],
+		"deleted_ifcvs": deleted["ifcvs"],
 		"parsed_created_items": len(created_items),
+		"invoice_targets": len(inv_nos),
 		"errors": errors[:30],
 		"status": "Pending",
-		"message": _(
-			"Undo complete. Deleted {0} Item(s), {1} Car Costing(s), {2} JE(s). Status is Pending."
-		).format(deleted_items, deleted_cc, deleted_je),
+		"message": msg,
 	}
-	return summary
+
+
+def _collect_undo_targets_from_excel(importer):
+	"""Return (invoice_nos set, chassis_nos set, import_file_keys set) from attached Excel."""
+	inv_nos = set()
+	chassis_nos = set()
+	import_file_keys = set()
+	if not importer.get("excel_file"):
+		return inv_nos, chassis_nos, import_file_keys
+
+	try:
+		file_path = get_file_path(importer.excel_file)
+	except Exception:
+		return inv_nos, chassis_nos, import_file_keys
+
+	fmt = (importer.get("import_type") or "").strip()
+	if fmt in ("", "Auto Detect"):
+		try:
+			fmt = detect_excel_format(file_path)
+		except Exception:
+			fmt = "Unknown Format"
+
+	format_option = importer.get("import_file_number_format") or "Invoice No"
+
+	try:
+		if fmt == "MKT Statement":
+			invoice_info, _container_rows, car_rows = parse_mkt_statement_excel(file_path)
+			for car in car_rows or []:
+				inv = normalize_inv_no(car.get("invoice_no"))
+				if inv:
+					inv_nos.add(inv)
+				if car.get("chassis_no"):
+					chassis_nos.add(str(car["chassis_no"]).strip())
+			for inv_no, info in (invoice_info or {}).items():
+				inv = normalize_inv_no(inv_no)
+				if inv:
+					inv_nos.add(inv)
+				bl_sw = (info or {}).get("bl_sw") or ""
+				for key in (
+					inv,
+					bl_sw,
+					compute_import_file_number(inv, bl_sw, format_option),
+				):
+					if key:
+						import_file_keys.add(str(key).strip())
+			for inv in inv_nos:
+				import_file_keys.add(inv)
+		elif fmt == "Mukechi":
+			# Mukechi undo still relies on Created Item lines; chassis optional
+			pass
+	except Exception:
+		frappe.log_error(title="Undo Import: parse excel", message=frappe.get_traceback())
+
+	return inv_nos, chassis_nos, import_file_keys
+
+
+def _parse_mkt_docs_from_log(import_log):
+	"""Pull invoice nos + PI names from MKT log lines if log still present."""
+	import re
+
+	inv_nos = set()
+	pi_names = set()
+	if not import_log:
+		return inv_nos, pi_names
+	for match in re.finditer(
+		r"Purchase Invoice '([^']+)' for Supplier Invoice No:\s*(\S+)",
+		import_log,
+	):
+		pi_names.add(match.group(1).strip())
+		inv_nos.add(normalize_inv_no(match.group(2)))
+	for match in re.finditer(r"Supplier Invoice No:\s*(\S+)", import_log):
+		inv_nos.add(normalize_inv_no(match.group(1)))
+	return inv_nos, pi_names
+
+
+def _cancel_and_delete(doctype, name, errors, label=None):
+	try:
+		if not frappe.db.exists(doctype, name):
+			return False
+		doc = frappe.get_doc(doctype, name)
+		if doc.docstatus == 1:
+			doc.flags.ignore_permissions = True
+			doc.cancel()
+		frappe.delete_doc(doctype, name, force=1, ignore_permissions=True)
+		return True
+	except Exception as exc:
+		errors.append(f"{label or doctype} {name}: {exc}")
+		if len(errors) <= 40:
+			frappe.log_error(
+				title=f"Undo Import delete failed: {doctype} {name}",
+				message=frappe.get_traceback(),
+			)
+		return False
+
+
+def _undo_delete_purchase_invoices(inv_nos, extra_pi_names, errors):
+	deleted = 0
+	names = set(extra_pi_names or [])
+	inv_list = [str(i).strip() for i in (inv_nos or []) if i]
+	for chunk_start in range(0, len(inv_list), 100):
+		chunk = inv_list[chunk_start : chunk_start + 100]
+		for name in frappe.get_all(
+			"Purchase Invoice",
+			filters={"bill_no": ["in", chunk], "docstatus": ["!=", 2]},
+			pluck="name",
+		):
+			names.add(name)
+		# Deterministic MKTPINV names for this company
+		company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+			"Global Defaults", "default_company"
+		)
+		for inv in chunk:
+			names.add(_mkt_pi_deterministic_name(inv, company))
+
+	for name in names:
+		if _cancel_and_delete("Purchase Invoice", name, errors):
+			deleted += 1
+			if deleted % 40 == 0:
+				frappe.db.commit()
+	return deleted
+
+
+def _undo_delete_expense_jes(inv_nos, errors):
+	deleted = 0
+	names = set()
+	inv_list = [str(i).strip() for i in (inv_nos or []) if i]
+	company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+		"Global Defaults", "default_company"
+	)
+	for chunk_start in range(0, len(inv_list), 100):
+		chunk = inv_list[chunk_start : chunk_start + 100]
+		for name in frappe.get_all(
+			"Journal Entry",
+			filters={"cheque_no": ["in", chunk], "docstatus": ["!=", 2]},
+			pluck="name",
+		):
+			names.add(name)
+		for inv in chunk:
+			digest = hashlib.md5(f"MKT|{inv}|{company}".encode()).hexdigest()[:12].upper()
+			names.add(f"MKTJV-{digest}")
+
+	for name in names:
+		if _cancel_and_delete("Journal Entry", name, errors):
+			deleted += 1
+			if deleted % 40 == 0:
+				frappe.db.commit()
+	return deleted
+
+
+def _undo_delete_import_files(import_file_keys, errors):
+	deleted = 0
+	if not frappe.db.exists("DocType", "Import File"):
+		return 0
+	keys = [str(k).strip() for k in (import_file_keys or []) if k]
+	names = set()
+	for chunk_start in range(0, len(keys), 100):
+		chunk = keys[chunk_start : chunk_start + 100]
+		for r in frappe.get_all(
+			"Import File",
+			filters={"import_file_number": ["in", chunk]},
+			fields=["name"],
+		):
+			names.add(r.name)
+		for r in frappe.get_all("Import File", filters={"name": ["in", chunk]}, fields=["name"]):
+			names.add(r.name)
+
+	for name in names:
+		if _cancel_and_delete("Import File", name, errors):
+			deleted += 1
+			if deleted % 40 == 0:
+				frappe.db.commit()
+	return deleted
+
+
+def _undo_delete_ifcvs(import_file_keys, errors):
+	deleted = 0
+	if not frappe.db.exists("DocType", "Import File Cost Voucher"):
+		return 0
+	keys = [str(k).strip() for k in (import_file_keys or []) if k]
+	names = set()
+	for chunk_start in range(0, len(keys), 100):
+		chunk = keys[chunk_start : chunk_start + 100]
+		for name in frappe.get_all(
+			"Import File Cost Voucher",
+			filters={"import_file": ["in", chunk], "docstatus": ["!=", 2]},
+			pluck="name",
+		):
+			names.add(name)
+	for name in names:
+		if _cancel_and_delete("Import File Cost Voucher", name, errors):
+			deleted += 1
+	return deleted
 
 
 def _parse_created_items_from_log(import_log):

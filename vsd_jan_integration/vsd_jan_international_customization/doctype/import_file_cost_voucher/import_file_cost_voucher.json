@@ -8,6 +8,11 @@
   "import_file",
   "posting_date",
   "column_break_1",
+  "exchange_rate_company_usd",
+  "exchange_rate_usd_jpy",
+  "company_currency",
+  "usd_currency",
+  "jpy_currency",
   "auto_update_car_costing",
   "distribution_basis",
   "section_break_vehicles",
@@ -45,6 +50,48 @@
   {
    "fieldname": "column_break_1",
    "fieldtype": "Column Break"
+  },
+  {
+   "description": "Company currency units per 1 USD (e.g. TZS per USD). Fetched from Currency Exchange; editable per voucher.",
+   "fieldname": "exchange_rate_company_usd",
+   "fieldtype": "Float",
+   "label": "Exchange Rate (Company / USD)",
+   "non_negative": 1,
+   "precision": "9"
+  },
+  {
+   "description": "Japanese Yen per 1 USD. Fetched from Currency Exchange; editable per voucher.",
+   "fieldname": "exchange_rate_usd_jpy",
+   "fieldtype": "Float",
+   "label": "Exchange Rate (USD / JPY)",
+   "non_negative": 1,
+   "precision": "9"
+  },
+  {
+   "fieldname": "company_currency",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Company Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "default": "USD",
+   "fieldname": "usd_currency",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "USD Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "default": "JPY",
+   "fieldname": "jpy_currency",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "JPY Currency",
+   "options": "Currency",
+   "read_only": 1
   },
   {
    "default": "0",

@@ -117,7 +117,7 @@ class TestItemExcelImporter(FrappeTestCase):
 		try:
 			self.assertEqual(detect_excel_format(file_path), "MKT Statement")
 
-			res = process_mkt_statement(file_path, create_lcv=False)
+			res = process_mkt_statement(file_path, create_ifcv=False)
 			self.assertTrue(res["created_pi"] + res["updated_pi"] >= 1)
 
 			# Verify Item updates
@@ -214,7 +214,7 @@ class TestItemExcelImporter(FrappeTestCase):
 			self.assertEqual(car_rows[0]["container_no"], "RORO")
 			self.assertTrue(car_rows[0]["is_roro"])
 
-			res = process_mkt_statement(file_path, create_lcv=False)
+			res = process_mkt_statement(file_path, create_ifcv=False)
 			self.assertTrue(res["created_pi"] + res["updated_pi"] >= 1)
 
 			# Verify Item container_no is "RORO"
@@ -344,7 +344,7 @@ class TestItemExcelImporter(FrappeTestCase):
 			# Run import with auto submit options enabled
 			res = process_mkt_statement(
 				file_path,
-				create_lcv=False,
+				create_ifcv=False,
 				auto_submit_pi=True,
 				auto_submit_jv=True,
 			)
@@ -400,7 +400,7 @@ class TestItemExcelImporter(FrappeTestCase):
 
 		try:
 			# Test format: "Invoice No - BL Number"
-			res = process_mkt_statement(file_path, create_lcv=False, import_file_number_format="Invoice No - BL Number")
+			res = process_mkt_statement(file_path, create_ifcv=False, import_file_number_format="Invoice No - BL Number")
 			self.assertTrue(frappe.db.exists("Import File", "INV-FMT-001 - BL-FMT-888"))
 			if_doc = frappe.get_doc("Import File", "INV-FMT-001 - BL-FMT-888")
 			self.assertEqual(if_doc.import_file_number, "INV-FMT-001 - BL-FMT-888")

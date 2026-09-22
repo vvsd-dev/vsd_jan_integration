@@ -4,11 +4,12 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 
 class ImportFileCostVoucher(Document):
 	def validate(self):
+		self._set_document_currency_defaults()
 		self._sync_expense_distribution_from_costing()
 		self._distribute_allocations()
 		self._update_vehicle_purchase_and_charges()
@@ -20,13 +21,116 @@ class ImportFileCostVoucher(Document):
 		self.push_actual_to_item()
 		self.update_stock_valuation_from_allocations()
 
+	def on_cancel(self):
+		"""Revert IFCV native stock valuation/GL. Skip PIs still owned by submitted LCVs."""
+		self.revert_stock_valuation_from_allocations()
+
+	def _costing_settings(self):
+		"""Return Costing Settings flags. Prefer DB value — never assume LCV ON."""
+		if not frappe.db.exists("DocType", "Costing Settings"):
+			# DocType missing: keep legacy LCV behaviour
+			return frappe._dict(create_landed_cost_voucher=1)
+		# Avoid get_cached_doc / Document.get default traps (missing key → default 1)
+		return frappe._dict(
+			create_landed_cost_voucher=cint(
+				frappe.db.get_single_value("Costing Settings", "create_landed_cost_voucher")
+			)
+		)
+
+	def _company_for_voucher(self):
+		return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+			"Global Defaults", "default_company"
+		)
+
+	def _set_document_currency_defaults(self):
+		"""Hidden currency links + default exchange rates from Currency Exchange."""
+		company = self._company_for_voucher()
+		comp_cur = frappe.db.get_value("Company", company, "default_currency") if company else None
+		if comp_cur:
+			self.company_currency = comp_cur
+		if not self.usd_currency:
+			self.usd_currency = "USD"
+		if not self.jpy_currency:
+			self.jpy_currency = "JPY"
+
+		posting_date = self.posting_date or frappe.utils.today()
+		if not flt(self.exchange_rate_company_usd):
+			self.exchange_rate_company_usd = _fetch_exchange_rate("USD", comp_cur, posting_date)
+		if not flt(self.exchange_rate_usd_jpy):
+			self.exchange_rate_usd_jpy = _fetch_exchange_rate("USD", "JPY", posting_date)
+
+	def _usd_exchange_rate(self, company=None, posting_date=None):
+		"""Company currency units per 1 USD (e.g. TZS per USD)."""
+		if flt(self.exchange_rate_company_usd):
+			return flt(self.exchange_rate_company_usd)
+		company = company or self._company_for_voucher()
+		comp_cur = frappe.db.get_value("Company", company, "default_currency") if company else None
+		if comp_cur == "USD":
+			return 1.0
+		posting_date = posting_date or self.posting_date or frappe.utils.today()
+		return _fetch_exchange_rate("USD", comp_cur, posting_date) or 2700.0
+
+	def _allocation_base_amounts(self, company=None, posting_date=None):
+		"""Map allocations → company + account-currency amounts per item / (item, account).
+
+		Allocation `amount` is always in account currency. Company amounts prefer the
+		vehicle/PI conversion_rate when allocation currency matches purchase currency.
+
+		Returns:
+			by_item_total: item → company-currency total
+			by_item_by_account: item → account → company-currency (valuation / applicable_charges)
+			by_item_by_account_acct: item → account → account-currency (LCV tax.amount / GL amount)
+		"""
+		from collections import defaultdict
+
+		company = company or frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+			"Global Defaults", "default_company"
+		)
+		posting_date = posting_date or self.posting_date or frappe.utils.today()
+		comp_cur = frappe.db.get_value("Company", company, "default_currency") if company else None
+
+		fx_by_item = {}
+		for v in self.vehicles or []:
+			if not v.item:
+				continue
+			fx_by_item[v.item] = {
+				"currency": v.purchase_currency,
+				"rate": flt(v.exchange_rate) or 1.0,
+			}
+
+		by_item_total = defaultdict(float)
+		by_item_by_account = defaultdict(lambda: defaultdict(float))
+		by_item_by_account_acct = defaultdict(lambda: defaultdict(float))
+		for a in self.allocations or []:
+			if not a.item or not flt(a.amount):
+				continue
+			acc = a.account or frappe.db.get_value("Costing", a.costing_head, "account")
+			if acc and _is_stock_in_hand_account(acc):
+				continue
+			acct_amt = flt(a.amount)
+			cur = a.currency or (
+				frappe.db.get_value("Account", acc, "account_currency") if acc else None
+			)
+			fx = fx_by_item.get(a.item) or {}
+			if cur and comp_cur and cur == comp_cur:
+				base_amt = acct_amt
+			elif cur and fx.get("currency") == cur and flt(fx.get("rate")):
+				base_amt = acct_amt * flt(fx["rate"])
+			else:
+				base_amt = _amount_in_company_currency(acct_amt, cur, company, posting_date)
+			by_item_total[a.item] += base_amt
+			if acc:
+				by_item_by_account[a.item][acc] += base_amt
+				by_item_by_account_acct[a.item][acc] += acct_amt
+
+		return by_item_total, by_item_by_account, by_item_by_account_acct
+
 	def update_stock_valuation_from_allocations(self):
-		"""Create/submit Landed Cost Voucher(s) from IFCV allocations (LCV-style valuation).
+		"""Apply landed valuation from IFCV allocations.
 
-		Valuation = PI purchase base + allocated IFCV charges, via ERPNext LCV submit.
-		Also refreshes Item.custom_cost from PI rate + actual totals (no selling price).
-
-		Allocation amounts are in account currency; LCV / stock valuation use company currency.
+		Costing Settings.create_landed_cost_voucher:
+		- ON  → one Manual LCV per expense account (IFCV per-car charges)
+		- OFF → IFCV updates PI valuation + GL directly (no LCV document)
 		"""
 		from collections import defaultdict
 
@@ -34,26 +138,17 @@ class ImportFileCostVoucher(Document):
 			"Global Defaults", "default_company"
 		)
 		posting_date = self.posting_date or frappe.utils.today()
-
-		by_item_total = defaultdict(float)
-		by_item_by_account = defaultdict(lambda: defaultdict(float))
-		for a in self.allocations or []:
-			if not a.item or not flt(a.amount):
-				continue
-			acc = a.account or frappe.db.get_value("Costing", a.costing_head, "account")
-			cur = a.currency or (
-				frappe.db.get_value("Account", acc, "account_currency") if acc else None
-			)
-			base_amt = _amount_in_company_currency(flt(a.amount), cur, company, posting_date)
-			by_item_total[a.item] += base_amt
-			if acc:
-				by_item_by_account[a.item][acc] += base_amt
+		by_item_total, by_item_by_account, by_item_by_account_acct = self._allocation_base_amounts(
+			company, posting_date
+		)
 
 		if not by_item_total:
 			return
 
 		# Resolve stock PI line per item
-		pi_groups = defaultdict(lambda: {"items": {}, "company": None, "grand_total": 0, "supplier": None, "posting_date": None})
+		pi_groups = defaultdict(
+			lambda: {"items": {}, "company": None, "grand_total": 0, "supplier": None, "posting_date": None}
+		)
 		for item_code, total in by_item_total.items():
 			row = frappe.db.sql(
 				"""
@@ -93,20 +188,28 @@ class ImportFileCostVoucher(Document):
 			g["grand_total"] = flt(r.base_grand_total) or flt(r.grand_total)
 			g["items"][item_code] = r
 
+		settings = self._costing_settings()
+		create_lcv = cint(settings.create_landed_cost_voucher)
+
 		created = []
 		for pi_name, group in pi_groups.items():
 			try:
-				lcv_name = self._create_and_submit_lcv_for_pi(
-					pi_name,
-					group,
-					{item: by_item_by_account[item] for item in group["items"]},
-					{item: by_item_total[item] for item in group["items"]},
-				)
-				if lcv_name:
-					created.append(lcv_name)
+				item_base = {item: by_item_by_account[item] for item in group["items"]}
+				item_acct = {item: by_item_by_account_acct[item] for item in group["items"]}
+				item_total = {item: by_item_total[item] for item in group["items"]}
+				if create_lcv:
+					names = self._create_and_submit_lcv_for_pi(
+						pi_name, group, item_base, item_total, item_acct
+					)
+					if names:
+						created.extend(names if isinstance(names, list) else [names])
+				else:
+					self._apply_ifcv_landed_valuation(
+						pi_name, group, item_base, item_total, item_acct
+					)
 			except Exception:
 				frappe.log_error(
-					title=f"IFCV LCV valuation for {pi_name}",
+					title=f"IFCV valuation for {pi_name}",
 					message=frappe.get_traceback(),
 				)
 
@@ -121,7 +224,6 @@ class ImportFileCostVoucher(Document):
 				base = flt(pi_row.base_amount) if pi_row else 0
 				if not base and pi_row:
 					base = flt(pi_row.amount)
-				# If no PI, fall back to purchase price field if present
 				if not base:
 					base = flt(frappe.db.get_value("Item", item_code, "custom_price"))
 				frappe.db.set_value(
@@ -134,154 +236,391 @@ class ImportFileCostVoucher(Document):
 			except Exception:
 				pass
 
-		if created:
+		if create_lcv and created:
 			self.add_comment(
 				"Comment",
 				_("Submitted Landed Cost Voucher(s) for valuation: {0}").format(", ".join(created)),
 			)
+		elif not create_lcv and pi_groups:
+			self.add_comment(
+				"Comment",
+				_("Applied IFCV landed valuation (no LCV) on Purchase Invoice(s): {0}").format(
+					", ".join(pi_groups.keys())
+				),
+			)
 
-	def _create_and_submit_lcv_for_pi(self, pi_name, group, item_account_map, item_total_map):
-		"""Build LCV from IFCV — mirrors manual MAT-LCV pattern, ERPNext-safe.
+	def revert_stock_valuation_from_allocations(self):
+		"""On IFCV cancel: undo native valuation only.
 
-		ERPNext allows only ONE tax row when Distribute Manually. Strategy:
-		- One LCV with Distribute Manually
-		- One tax row = sum of applicable charges (company currency)
-		- Item.applicable_charges = vehicle/IFCV allocation totals (already computed)
-
-		Per-account JE expenses stay on the books; LCV reclasses the combined charge
-		into stock valuation. Stock In Hand is never included (filtered upstream).
+		If a submitted Landed Cost Voucher still owns the PI charges, skip that PI —
+		cancelling the LCV will rebuild valuation/GL the ERPNext way.
 		"""
+		from collections import defaultdict
+
+		by_item_total, _by_item_by_account, _by_item_by_account_acct = self._allocation_base_amounts()
+		if not by_item_total and not (self.vehicles or []):
+			return
+
+		item_codes = {v.item for v in (self.vehicles or []) if v.item}
+		item_codes.update(by_item_total.keys())
+		if not item_codes:
+			return
+
+		pi_names = set()
+		for item_code in item_codes:
+			row = frappe.db.sql(
+				"""
+				SELECT pi.name as pi_name
+				FROM `tabPurchase Invoice` pi
+				INNER JOIN `tabPurchase Invoice Item` pii ON pii.parent = pi.name
+				WHERE pii.item_code = %s
+					AND pi.docstatus = 1
+					AND pi.update_stock = 1
+				ORDER BY pi.posting_date DESC, pi.creation DESC
+				LIMIT 1
+				""",
+				item_code,
+			)
+			if row:
+				pi_names.add(row[0][0])
+
+		reverted = []
+		skipped = []
+		for pi_name in pi_names:
+			try:
+				if self._pi_has_submitted_lcv(pi_name):
+					skipped.append(pi_name)
+					continue
+				self._revert_ifcv_landed_valuation(pi_name)
+				reverted.append(pi_name)
+			except Exception:
+				frappe.log_error(
+					title=f"IFCV cancel valuation revert for {pi_name}",
+					message=frappe.get_traceback(),
+				)
+
+		# Restore Item.custom_cost ≈ purchase base only (drop IFCV actuals contribution)
+		for item_code in item_codes:
+			try:
+				base = flt(frappe.db.get_value("Item", item_code, "custom_price"))
+				pi_base = frappe.db.sql(
+					"""
+					SELECT pii.base_amount, pii.amount
+					FROM `tabPurchase Invoice Item` pii
+					INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
+					WHERE pii.item_code = %s AND pi.docstatus = 1 AND pi.update_stock = 1
+					ORDER BY pi.posting_date DESC, pi.creation DESC
+					LIMIT 1
+					""",
+					item_code,
+				)
+				if pi_base:
+					base = flt(pi_base[0][0]) or flt(pi_base[0][1]) or base
+				frappe.db.set_value("Item", item_code, "custom_cost", base, update_modified=False)
+			except Exception:
+				pass
+
+		if reverted:
+			self.add_comment(
+				"Comment",
+				_("Reverted IFCV landed valuation on Purchase Invoice(s): {0}").format(", ".join(reverted)),
+			)
+		if skipped:
+			self.add_comment(
+				"Comment",
+				_(
+					"Skipped valuation revert for {0} — submitted Landed Cost Voucher(s) still own charges; cancel those LCVs to rebuild."
+				).format(", ".join(skipped)),
+			)
+
+	def _pi_has_submitted_lcv(self, pi_name):
+		"""True when any submitted LCV is linked to this Purchase Invoice."""
+		return bool(
+			frappe.db.sql(
+				"""
+				SELECT lcv.name
+				FROM `tabLanded Cost Voucher` lcv
+				INNER JOIN `tabLanded Cost Purchase Receipt` lpr ON lpr.parent = lcv.name
+				WHERE lpr.receipt_document = %s
+					AND lcv.docstatus = 1
+				LIMIT 1
+				""",
+				pi_name,
+			)
+		)
+
+	def _revert_ifcv_landed_valuation(self, pi_name):
+		"""Clear IFCV-applied landed charges on PI and rebuild SLE/GL (ERPNext LCV-cancel style)."""
+		doc = frappe.get_doc("Purchase Invoice", pi_name)
+		if doc.docstatus != 1 or not doc.update_stock:
+			return
+
+		# Recalc from remaining submitted LCVs only (none → amounts become 0)
+		doc.set_landed_cost_voucher_amount()
+		doc.update_valuation_rate(reset_outgoing_rate=False)
+		for item in doc.items:
+			item.db_update()
+
+		# Same cancel/repost sequence as Landed Cost Voucher.update_landed_cost
+		doc.docstatus = 2
+		doc.update_stock_ledger(allow_negative_stock=True, via_landed_cost_voucher=True)
+		doc.make_gl_entries_on_cancel()
+
+		doc.docstatus = 1
+		if hasattr(doc, "make_bundle_using_old_serial_batch_fields"):
+			doc.make_bundle_using_old_serial_batch_fields(via_landed_cost_voucher=True)
+		doc.update_stock_ledger(allow_negative_stock=True, via_landed_cost_voucher=True)
+		doc.make_gl_entries()
+		if hasattr(doc, "repost_future_sle_and_gle"):
+			doc.repost_future_sle_and_gle(via_landed_cost_voucher=True)
+
+		return pi_name
+
+	def _create_and_submit_lcv_for_pi(
+		self, pi_name, group, item_account_map, item_total_map, item_account_map_acct=None
+	):
+		"""One Manual LCV per expense account; applicable_charges = IFCV company splits.
+
+		LCV tax `amount` must be in account currency (ERPNext multi-currency LCV).
+		`applicable_charges` stay in company currency for stock valuation.
+		"""
+		from collections import defaultdict
+
 		from erpnext.controllers.taxes_and_totals import init_landed_taxes_and_totals
 
 		company = group["company"]
+		company_currency = frappe.db.get_value("Company", company, "default_currency")
 		cost_center = frappe.db.get_value("Company", company, "cost_center") or frappe.db.get_value(
 			"Cost Center", {"company": company, "is_group": 0}, "name"
 		)
 
-		# Prefer vehicle.applicable_charges when present (set on save)
-		charges_by_item = {}
-		for v in self.vehicles or []:
-			if v.item and v.item in group["items"] and flt(v.applicable_charges):
-				charges_by_item[v.item] = flt(v.applicable_charges)
-		if not charges_by_item:
-			charges_by_item = {k: flt(v) for k, v in (item_total_map or {}).items() if flt(v)}
-
-		tax_total = sum(charges_by_item.values())
-		if not tax_total:
-			return None
-
-		desc = f"IFCV {self.name} — applicable charges"
-		existing = frappe.db.sql(
-			"""
-			SELECT lcv.name
-			FROM `tabLanded Cost Voucher` lcv
-			INNER JOIN `tabLanded Cost Purchase Receipt` lpr ON lpr.parent = lcv.name
-			INNER JOIN `tabLanded Cost Taxes and Charges` lct ON lct.parent = lcv.name
-			WHERE lpr.receipt_document = %s
-				AND lcv.docstatus = 1
-				AND lct.description = %s
-			LIMIT 1
-			""",
-			(pi_name, desc),
-		)
-		if existing:
-			return existing[0][0]
-
-		# Pick expense account: prefer first allocated Costing account (non-stock)
-		expense_account = None
+		# Invert item→account map to account→item amounts (company + account currency)
+		by_account_item = defaultdict(dict)
+		by_account_item_acct = defaultdict(dict)
 		for item_code, acc_map in (item_account_map or {}).items():
-			for acc in acc_map:
-				if acc and not _is_stock_in_hand_account(acc):
-					expense_account = acc
-					break
-			if expense_account:
-				break
-		if not expense_account:
-			expense_account = frappe.db.get_value(
-				"Company", company, "expenses_included_in_valuation"
-			) or frappe.db.get_value(
-				"Account",
-				{"company": company, "account_type": "Expense Account", "is_group": 0},
-				"name",
-			)
-		if not expense_account:
-			frappe.throw(_("No expense account available for Landed Cost Voucher from IFCV"))
+			acct_map = (item_account_map_acct or {}).get(item_code) or {}
+			for acc, amt in (acc_map or {}).items():
+				if flt(amt) and acc and not _is_stock_in_hand_account(acc):
+					by_account_item[acc][item_code] = flt(amt)
+					by_account_item_acct[acc][item_code] = flt(acct_map.get(acc, amt))
 
-		lcv = frappe.new_doc("Landed Cost Voucher")
-		lcv.company = company
-		lcv.posting_date = self.posting_date or frappe.utils.today()
-		lcv.distribute_charges_based_on = "Distribute Manually"
+		if not by_account_item:
+			return []
 
-		lcv.append(
-			"purchase_receipts",
-			{
-				"receipt_document_type": "Purchase Invoice",
-				"receipt_document": pi_name,
-				"supplier": group.get("supplier")
-				or frappe.db.get_value("Purchase Invoice", pi_name, "supplier"),
-				"posting_date": group.get("posting_date")
-				or frappe.db.get_value("Purchase Invoice", pi_name, "posting_date"),
-				"grand_total": group["grand_total"],
-			},
+		supplier = group.get("supplier") or frappe.db.get_value("Purchase Invoice", pi_name, "supplier")
+		posting_date = group.get("posting_date") or frappe.db.get_value(
+			"Purchase Invoice", pi_name, "posting_date"
 		)
+		created_names = []
 
-		lcv.append(
-			"taxes",
-			{
-				"expense_account": expense_account,
-				"description": desc,
-				"amount": tax_total,
-			},
-		)
-
-		for item_code, r in group["items"].items():
-			charge = flt(charges_by_item.get(item_code))
-			if not charge:
+		for expense_account, item_amounts in by_account_item.items():
+			tax_total_base = sum(flt(v) for v in item_amounts.values())
+			if not tax_total_base:
 				continue
+
+			account_currency = (
+				frappe.get_cached_value("Account", expense_account, "account_currency")
+				or company_currency
+			)
+			item_acct_amounts = by_account_item_acct.get(expense_account) or {}
+			tax_total_acct = sum(flt(v) for v in item_acct_amounts.values())
+			if not tax_total_acct:
+				tax_total_acct = tax_total_base if account_currency == company_currency else 0
+			if not tax_total_acct:
+				frappe.log_error(
+					title=f"IFCV LCV {self.name} / {expense_account}",
+					message=f"Missing account-currency total for {expense_account}",
+				)
+				continue
+
+			if account_currency == company_currency:
+				exchange_rate = 1.0
+			else:
+				# Keep LCV base_amount == IFCV company total (same FX as applicable_charges)
+				exchange_rate = flt(tax_total_base) / flt(tax_total_acct) if tax_total_acct else 1.0
+
+			desc = f"IFCV {self.name} / {expense_account}"
+			existing = frappe.db.sql(
+				"""
+				SELECT lcv.name
+				FROM `tabLanded Cost Voucher` lcv
+				INNER JOIN `tabLanded Cost Purchase Receipt` lpr ON lpr.parent = lcv.name
+				INNER JOIN `tabLanded Cost Taxes and Charges` lct ON lct.parent = lcv.name
+				WHERE lpr.receipt_document = %s
+					AND lcv.docstatus = 1
+					AND lct.expense_account = %s
+					AND lct.description = %s
+				LIMIT 1
+				""",
+				(pi_name, expense_account, desc),
+			)
+			if existing:
+				created_names.append(existing[0][0])
+				continue
+
+			lcv = frappe.new_doc("Landed Cost Voucher")
+			lcv.company = company
+			lcv.posting_date = self.posting_date or frappe.utils.today()
+			lcv.distribute_charges_based_on = "Distribute Manually"
+
 			lcv.append(
-				"items",
+				"purchase_receipts",
 				{
 					"receipt_document_type": "Purchase Invoice",
 					"receipt_document": pi_name,
-					"purchase_receipt_item": r.pii_name,
-					"item_code": item_code,
-					"description": r.description or item_code,
-					"qty": flt(r.qty) or 1,
-					"rate": flt(r.base_rate) or flt(r.rate),
-					"amount": flt(r.base_amount) or flt(r.amount),
-					"cost_center": r.cost_center or cost_center,
-					"applicable_charges": charge,
+					"supplier": supplier,
+					"posting_date": posting_date,
+					"grand_total": group["grand_total"],
+				},
+			)
+			lcv.append(
+				"taxes",
+				{
+					"expense_account": expense_account,
+					"description": desc,
+					"amount": tax_total_acct,
+					"account_currency": account_currency,
+					"exchange_rate": exchange_rate,
 				},
 			)
 
-		if not lcv.items:
-			return None
+			for item_code, r in group["items"].items():
+				charge = flt(item_amounts.get(item_code))
+				if not charge:
+					continue
+				lcv.append(
+					"items",
+					{
+						"receipt_document_type": "Purchase Invoice",
+						"receipt_document": pi_name,
+						"purchase_receipt_item": r.pii_name,
+						"item_code": item_code,
+						"description": r.description or item_code,
+						"qty": flt(r.qty) or 1,
+						"rate": flt(r.base_rate) or flt(r.rate),
+						"amount": flt(r.base_amount) or flt(r.amount),
+						"cost_center": r.cost_center or cost_center,
+						"applicable_charges": charge,
+					},
+				)
 
-		items_total = sum(flt(i.applicable_charges) for i in lcv.items)
-		diff = flt(tax_total) - flt(items_total)
-		if lcv.items and abs(diff) >= 0.0001:
-			lcv.items[-1].applicable_charges = flt(lcv.items[-1].applicable_charges) + diff
+			if not lcv.items:
+				continue
 
-		try:
-			lcv.flags.ignore_permissions = True
-			init_landed_taxes_and_totals(lcv)
-			lcv.set_total_taxes_and_charges()
-			if lcv.taxes:
-				lcv.taxes[0].amount = tax_total
-			lcv.set_total_taxes_and_charges()
 			items_total = sum(flt(i.applicable_charges) for i in lcv.items)
-			diff = flt(lcv.total_taxes_and_charges) - flt(items_total)
+			diff = flt(tax_total_base) - flt(items_total)
 			if lcv.items and abs(diff) >= 0.0001:
 				lcv.items[-1].applicable_charges = flt(lcv.items[-1].applicable_charges) + diff
-			lcv.insert(ignore_permissions=True)
-			lcv.submit()
-			return lcv.name
-		except Exception:
-			frappe.log_error(
-				title=f"IFCV LCV {self.name} / {pi_name}",
-				message=frappe.get_traceback(),
+
+			try:
+				lcv.flags.ignore_permissions = True
+				init_landed_taxes_and_totals(lcv)
+				# Re-assert account-currency amount + IFCV-derived FX after init
+				if lcv.taxes:
+					lcv.taxes[0].amount = tax_total_acct
+					lcv.taxes[0].exchange_rate = exchange_rate
+					lcv.taxes[0].base_amount = flt(tax_total_acct) * flt(exchange_rate)
+				lcv.set_total_taxes_and_charges()
+				items_total = sum(flt(i.applicable_charges) for i in lcv.items)
+				diff = flt(lcv.total_taxes_and_charges) - flt(items_total)
+				if lcv.items and abs(diff) >= 0.0001:
+					lcv.items[-1].applicable_charges = flt(lcv.items[-1].applicable_charges) + diff
+				lcv.insert(ignore_permissions=True)
+				lcv.submit()
+				created_names.append(lcv.name)
+			except Exception:
+				frappe.log_error(
+					title=f"IFCV LCV {self.name} / {expense_account}",
+					message=frappe.get_traceback(),
+				)
+
+		return created_names
+
+	def _apply_ifcv_landed_valuation(
+		self, pi_name, group, item_account_map, item_total_map, item_account_map_acct=None
+	):
+		"""IFCV acts as LCV: update PI valuation + GL without creating LCV docs.
+
+		Sets landed_cost_voucher_amount from IFCV totals, rebuilds SLE/GL, and
+		injects account-wise credits via a temporary wrap of
+		get_item_account_wise_additional_cost.
+
+		GL shape (same as ERPNext LCV): amount = account currency, base_amount = company.
+		"""
+		import erpnext.accounts.doctype.purchase_invoice.purchase_invoice as pi_mod
+		import erpnext.stock.doctype.purchase_receipt.purchase_receipt as pr_mod
+
+		doc = frappe.get_doc("Purchase Invoice", pi_name)
+		if doc.docstatus != 1 or not doc.update_stock:
+			frappe.throw(
+				_("Purchase Invoice {0} must be submitted with Update Stock for IFCV valuation").format(
+					pi_name
+				)
 			)
-			return None
+
+		# Shape expected by PI make_gl_entries / get_item_account_wise_additional_cost
+		account_wise = {}
+		for item_code, r in group["items"].items():
+			pii_name = r.pii_name
+			acc_map = item_account_map.get(item_code) or {}
+			acct_map = (item_account_map_acct or {}).get(item_code) or {}
+			if not acc_map:
+				continue
+			key = (item_code, pii_name)
+			account_wise[key] = {}
+			for acc, base_amt in acc_map.items():
+				if not flt(base_amt) or _is_stock_in_hand_account(acc):
+					continue
+				acct_amt = flt(acct_map.get(acc))
+				if not acct_amt:
+					acct_amt = flt(base_amt)
+				account_wise[key][acc] = {"amount": acct_amt, "base_amount": flt(base_amt)}
+
+		for item in doc.items:
+			total = flt((item_total_map or {}).get(item.item_code))
+			item.landed_cost_voucher_amount = total
+			item.db_update()
+
+		doc.update_valuation_rate(reset_outgoing_rate=False)
+		for item in doc.items:
+			item.db_update()
+
+		original = pr_mod.get_item_account_wise_additional_cost
+
+		def wrapped(purchase_document):
+			result = original(purchase_document) or {}
+			if purchase_document != pi_name:
+				return result or None
+			merged = {k: dict(v) for k, v in result.items()}
+			for key, accs in account_wise.items():
+				merged.setdefault(key, {})
+				for acc, vals in accs.items():
+					merged[key].setdefault(acc, {"amount": 0.0, "base_amount": 0.0})
+					merged[key][acc]["amount"] = flt(merged[key][acc]["amount"]) + flt(vals["amount"])
+					merged[key][acc]["base_amount"] = flt(merged[key][acc]["base_amount"]) + flt(
+						vals["base_amount"]
+					)
+			return merged or None
+
+		pr_mod.get_item_account_wise_additional_cost = wrapped
+		pi_mod.get_item_account_wise_additional_cost = wrapped
+		try:
+			doc.docstatus = 2
+			doc.update_stock_ledger(allow_negative_stock=True, via_landed_cost_voucher=True)
+			doc.make_gl_entries_on_cancel()
+
+			doc.docstatus = 1
+			if hasattr(doc, "make_bundle_using_old_serial_batch_fields"):
+				doc.make_bundle_using_old_serial_batch_fields(via_landed_cost_voucher=True)
+			doc.update_stock_ledger(allow_negative_stock=True, via_landed_cost_voucher=True)
+			doc.make_gl_entries()
+			if hasattr(doc, "repost_future_sle_and_gle"):
+				doc.repost_future_sle_and_gle(via_landed_cost_voucher=True)
+		finally:
+			pr_mod.get_item_account_wise_additional_cost = original
+			pi_mod.get_item_account_wise_additional_cost = original
+
+		return pi_name
 
 	def push_actual_to_item(self):
 		"""Match IFCV allocations onto Item Expected/Actual costing tables.
@@ -424,10 +763,10 @@ class ImportFileCostVoucher(Document):
 				exp.distribution_method = distribution_method_from_costing(scope, entry_mode)
 
 	def _update_vehicle_purchase_and_charges(self):
-		"""Fill purchase FX from submitted PI + applicable_charges from allocations (company currency).
+		"""Fill purchase FX from submitted PI + applicable_charges (TZS/USD/Yen).
 
-		applicable_charges is what Landed Cost Voucher items get on Distribute Manually.
-		Stock In Hand expenses are already excluded from IFCV expenses/allocations.
+		applicable_charges (company) feeds Landed Cost / native valuation.
+		USD/Yen are display conversions for clients used to those figures.
 		"""
 		from collections import defaultdict
 
@@ -436,6 +775,7 @@ class ImportFileCostVoucher(Document):
 		)
 		posting_date = self.posting_date or frappe.utils.today()
 		comp_cur = frappe.db.get_value("Company", company, "default_currency") if company else None
+		usd_rate = self._usd_exchange_rate(company, posting_date)
 
 		# First pass: purchase FX from submitted stock PI
 		fx_by_item = {}
@@ -485,6 +825,8 @@ class ImportFileCostVoucher(Document):
 			if not a.item or not flt(a.amount):
 				continue
 			acc = a.account or frappe.db.get_value("Costing", a.costing_head, "account")
+			if acc and _is_stock_in_hand_account(acc):
+				continue
 			cur = a.currency or (
 				frappe.db.get_value("Account", acc, "account_currency") if acc else None
 			)
@@ -498,8 +840,13 @@ class ImportFileCostVoucher(Document):
 			charges_by_item[a.item] += base_amt
 
 		for v in self.vehicles or []:
-			if v.item:
-				v.applicable_charges = flt(charges_by_item.get(v.item))
+			if not v.item:
+				continue
+			v.applicable_charges = flt(charges_by_item.get(v.item))
+			yen_rate = flt(v.exchange_rate) or 1.0
+			usd_r = flt(usd_rate) or 1.0
+			v.applicable_charges_yen = (flt(v.applicable_charges) / yen_rate) if yen_rate else 0
+			v.applicable_charges_usd = (flt(v.applicable_charges) / usd_r) if usd_r else 0
 
 	def _vehicle_rows(self):
 		rows = []
@@ -689,6 +1036,38 @@ class ImportFileCostVoucher(Document):
 				)
 				if code:
 					line_by_item[item.name][code] = line_by_item[item.name].get(code, 0) + amount
+
+
+def _fetch_exchange_rate(from_currency, to_currency, posting_date=None):
+	"""Buying rate: 1 unit of from_currency in to_currency."""
+	if not from_currency or not to_currency:
+		return 0.0
+	if from_currency == to_currency:
+		return 1.0
+	posting_date = posting_date or frappe.utils.today()
+	try:
+		from erpnext.setup.utils import get_exchange_rate
+
+		return flt(get_exchange_rate(from_currency, to_currency, posting_date, "for_buying")) or 0.0
+	except Exception:
+		return 0.0
+
+
+@frappe.whitelist()
+def get_document_exchange_rates(posting_date=None):
+	"""Default voucher exchange rates from Currency Exchange (for client fetch)."""
+	company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+		"Global Defaults", "default_company"
+	)
+	comp_cur = frappe.db.get_value("Company", company, "default_currency") if company else None
+	posting_date = posting_date or frappe.utils.today()
+	return {
+		"company_currency": comp_cur,
+		"usd_currency": "USD",
+		"jpy_currency": "JPY",
+		"exchange_rate_company_usd": _fetch_exchange_rate("USD", comp_cur, posting_date),
+		"exchange_rate_usd_jpy": _fetch_exchange_rate("USD", "JPY", posting_date),
+	}
 
 
 def _amount_in_company_currency(amount, currency, company, date=None):
@@ -1098,7 +1477,10 @@ def load_from_import_file(import_file, distribution_basis=None):
 				"purchase_currency": v.get("purchase_currency") or "JPY",
 				"exchange_rate": flt(v.get("exchange_rate")) or 1.0,
 				"purchase_amount_company": flt(v.get("purchase_amount_company")),
+				"usd_exchange_rate": 0,
 				"applicable_charges": 0,
+				"applicable_charges_usd": 0,
+				"applicable_charges_yen": 0,
 			}
 		)
 

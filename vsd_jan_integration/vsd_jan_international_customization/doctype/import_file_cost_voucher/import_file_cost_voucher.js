@@ -5,10 +5,22 @@ frappe.ui.form.on('Import File Cost Voucher', {
 	refresh(frm) {
 		frm.add_custom_button(__('View by Vehicle'), () => openVehicleCostSummaryDialog(frm));
 		frm.add_custom_button(__('Reload from Import File'), () => loadFromImportFile(frm), __('Actions'));
+		frm.add_custom_button(__('Fetch Exchange Rates'), () => fetchIfcvExchangeRates(frm, false), __('Actions'));
 		frm.add_custom_button(__('Rebuild Allocations'), () => {
 			frm.trigger('rebuild_allocations');
 		}, __('Actions'));
 		frm.add_custom_button(__('Distribute Manually'), () => openManualDistributionDialog(frm), __('Actions'));
+		ensureVehicleSummaryStyles();
+		setupVehicleGridFormatters(frm);
+		if (frm.is_new() && !flt(frm.doc.exchange_rate_company_usd)) {
+			fetchIfcvExchangeRates(frm, true);
+		}
+	},
+
+	posting_date(frm) {
+		if (!flt(frm.doc.exchange_rate_company_usd) && !flt(frm.doc.exchange_rate_usd_jpy)) {
+			fetchIfcvExchangeRates(frm, true);
+		}
 	},
 
 	import_file(frm) {
@@ -40,6 +52,105 @@ function distributionMethodFromCosting(scope, entryMode) {
 
 function amt(amount, currency) {
 	return format_currency(amount, currency || null);
+}
+
+function ifcvCompanyCurrency(frm) {
+	return (frm.doc.company_currency || frappe.defaults.get_default('currency') || '').trim();
+}
+
+function fetchIfcvExchangeRates(frm, silent) {
+	return frappe.call({
+		method:
+			'vsd_jan_integration.vsd_jan_international_customization.doctype.import_file_cost_voucher.import_file_cost_voucher.get_document_exchange_rates',
+		args: { posting_date: frm.doc.posting_date },
+		callback(r) {
+			const d = r.message || {};
+			if (d.company_currency) {
+				frm.set_value('company_currency', d.company_currency);
+			}
+			if (d.usd_currency) {
+				frm.set_value('usd_currency', d.usd_currency);
+			}
+			if (d.jpy_currency) {
+				frm.set_value('jpy_currency', d.jpy_currency);
+			}
+			if (flt(d.exchange_rate_company_usd)) {
+				frm.set_value('exchange_rate_company_usd', d.exchange_rate_company_usd);
+			}
+			if (flt(d.exchange_rate_usd_jpy)) {
+				frm.set_value('exchange_rate_usd_jpy', d.exchange_rate_usd_jpy);
+			}
+			if (!silent) {
+				frappe.show_alert({
+					message: __('Exchange rates updated from Currency Exchange'),
+					indicator: 'green',
+				});
+			}
+		},
+	});
+}
+
+function setupVehicleGridFormatters(frm) {
+	if (!document.getElementById('ifcv-grid-css')) {
+		const style = document.createElement('style');
+		style.id = 'ifcv-grid-css';
+		style.textContent = `
+			.ifcv-grid-sub {
+				font-size: 10px;
+				color: var(--text-muted, #748089);
+				margin-top: 2px;
+				line-height: 1.25;
+			}
+		`;
+		document.head.appendChild(style);
+	}
+	const grid = frm.fields_dict.vehicles && frm.fields_dict.vehicles.grid;
+	if (!grid) {
+		return;
+	}
+	const companyCur = () => ifcvCompanyCurrency(frm);
+
+	grid.formatters.purchase_amount_company = (value, df, doc) => {
+		const base = amt(flt(value), companyCur());
+		const cur = doc.purchase_currency || frm.doc.jpy_currency || 'JPY';
+		const orig = flt(doc.purchase_price);
+		if (!orig || cur === companyCur()) {
+			return base;
+		}
+		return `${base}<div class="ifcv-grid-sub">${amt(orig, cur)}</div>`;
+	};
+}
+
+function allocationAmountInCompany(row, frm, vehicle) {
+	const companyCur = ifcvCompanyCurrency(frm);
+	const acctCur = (row.currency || '').trim();
+	const amount = flt(row.amount);
+	if (!amount) {
+		return { companyAmt: 0, companyCur, acctCur, showAcct: false };
+	}
+	if (!acctCur || !companyCur || acctCur === companyCur) {
+		return { companyAmt: amount, companyCur, acctCur, showAcct: false };
+	}
+	const usdRate = flt(frm.doc.exchange_rate_company_usd);
+	const yenRate = flt(vehicle && vehicle.exchange_rate);
+	let companyAmt = amount;
+	if (acctCur === (frm.doc.usd_currency || 'USD') && usdRate) {
+		companyAmt = amount * usdRate;
+	} else if (acctCur === (frm.doc.jpy_currency || 'JPY') && yenRate) {
+		companyAmt = amount * yenRate;
+	} else if (acctCur === 'YEN' && yenRate) {
+		companyAmt = amount * yenRate;
+	}
+	return { companyAmt, companyCur, acctCur, showAcct: true };
+}
+
+function allocationAmountHtml(row, frm, vehicle) {
+	const { companyAmt, companyCur, acctCur, showAcct } = allocationAmountInCompany(row, frm, vehicle);
+	let html = `<div>${amt(companyAmt, companyCur)}</div>`;
+	if (showAcct) {
+		html += `<div class="ifcv-vs__sub">(${amt(row.amount, acctCur)})</div>`;
+	}
+	return html;
 }
 
 frappe.ui.form.on('Import File Cost Voucher Expense', {
@@ -102,6 +213,9 @@ function applyLoadFromImportFileResult(frm, data) {
 		message: __('Loaded {0} vehicles and {1} expense lines', [vCount, eCount]),
 		indicator: vCount || eCount ? 'green' : 'orange',
 	});
+	if (!flt(frm.doc.exchange_rate_company_usd)) {
+		fetchIfcvExchangeRates(frm, true);
+	}
 }
 
 function loadFromImportFile(frm) {
@@ -554,6 +668,13 @@ function ensureVehicleSummaryStyles() {
 			text-transform: uppercase;
 			opacity: 0.7;
 		}
+		.ifcv-grid-sub {
+			font-size: 10px;
+			color: var(--text-muted, #748089);
+			margin-top: 2px;
+			line-height: 1.25;
+			font-weight: 400;
+		}
 		.ifcv-vs__foot-value {
 			font-size: 18px;
 			font-weight: 600;
@@ -692,13 +813,42 @@ function renderVehicleCostSummary(dialog, frm) {
 			const cur = r.currency || '—';
 			byCurrency[cur] = (byCurrency[cur] || 0) + r.amount;
 		});
-		const totalsHtml = Object.keys(byCurrency)
+		const lineTotalsHtml = Object.keys(byCurrency)
 			.map(cur => amt(byCurrency[cur], cur === '—' ? null : cur))
 			.join(' · ');
+
+		const companyCur = ifcvCompanyCurrency(frm) || 'TZS';
+		const usdCur = frm.doc.usd_currency || 'USD';
+		const jpyCur = frm.doc.jpy_currency || 'JPY';
+		const usdRate = flt(frm.doc.exchange_rate_company_usd) || 1;
+		const yenRate = flt(vehicle && vehicle.exchange_rate) || 1;
+
+		let companyTotal = flt(vehicle && vehicle.applicable_charges);
+		if (!companyTotal && rows.length) {
+			rows.forEach(r => {
+				companyTotal += allocationAmountInCompany(r, frm, vehicle).companyAmt;
+			});
+		}
+		let usdTotal = flt(vehicle && vehicle.applicable_charges_usd);
+		let yenTotal = flt(vehicle && vehicle.applicable_charges_yen);
+		if (!usdTotal && usdRate) {
+			usdTotal = companyTotal / usdRate;
+		}
+		if (!yenTotal && yenRate) {
+			yenTotal = companyTotal / yenRate;
+		}
+		const totalsHtml = [
+			amt(companyTotal, companyCur),
+			amt(usdTotal, usdCur),
+			amt(yenTotal, jpyCur),
+		].join(' · ');
+
 		const voucherTotal =
 			flt(frm.doc.total_allocated_amount) ||
 			(frm.doc.allocations || []).reduce((s, a) => s + flt(a.amount), 0);
-		const vehicleTotal = rows.reduce((s, r) => s + r.amount, 0);
+		const vehicleTotal =
+			companyTotal ||
+			rows.reduce((s, r) => s + allocationAmountInCompany(r, frm, vehicle).companyAmt, 0);
 		const sharePct = voucherTotal ? (vehicleTotal / voucherTotal) * 100 : 0;
 		const lineCount = rows.length;
 
@@ -730,7 +880,7 @@ function renderVehicleCostSummary(dialog, frm) {
 					${r.source_row ? `<span class="ifcv-vs__sub">${__('Expense row')} #${cint(r.source_row)}</span>` : ''}
 				</td>
 				<td>${frappe.utils.escape_html(r.account || '—')}</td>
-				<td class="amt">${amt(r.amount, r.currency)}</td>
+				<td class="amt">${allocationAmountHtml(r, frm, vehicle)}</td>
 			</tr>`;
 				})
 				.join('');
@@ -754,6 +904,9 @@ function renderVehicleCostSummary(dialog, frm) {
 			<div class="ifcv-vs__foot">
 				<div>
 					<div class="ifcv-vs__foot-label">${__('Total allocated to this vehicle')}</div>
+					${lineTotalsHtml && lineTotalsHtml !== totalsHtml
+						? `<div class="ifcv-vs__sub">${__('By line currency')}: ${lineTotalsHtml}</div>`
+						: ''}
 				</div>
 				<div class="ifcv-vs__foot-value">${totalsHtml}</div>
 			</div>`;
@@ -777,7 +930,7 @@ function renderVehicleCostSummary(dialog, frm) {
 					<div class="ifcv-vs__stat-value">${lineCount}</div>
 				</div>
 				<div class="ifcv-vs__stat">
-					<div class="ifcv-vs__stat-label">${__('Vehicle total')}</div>
+					<div class="ifcv-vs__stat-label">${__('Vehicle total')} (${frappe.utils.escape_html(companyCur)} · ${frappe.utils.escape_html(usdCur)} · ${frappe.utils.escape_html(jpyCur)})</div>
 					<div class="ifcv-vs__stat-value is-accent">${totalsHtml || amt(0)}</div>
 				</div>
 				<div class="ifcv-vs__stat">

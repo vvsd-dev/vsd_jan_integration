@@ -15,7 +15,7 @@
   "column_break_vewl",
   "auto_submit_purchase_invoice",
   "auto_submit_journal_entry",
-  "create_lcv",
+  "create_ifcv",
   "processed_invoices",
   "processed_cars",
   "section_break_wypj",
@@ -74,11 +74,11 @@
   {
    "default": "0",
    "depends_on": "eval:doc.import_type == 'MKT Statement' || doc.import_type == 'Auto Detect'",
-   "description": "When checked, the Purchase Invoice will be submitted and a Landed Cost Voucher will be created for the charges.",
-   "fieldname": "create_lcv",
+   "description": "When checked, the Purchase Invoice (and expense Journal Entry) will be submitted and an Import File Cost Voucher will be created from the Import File charges.",
+   "fieldname": "create_ifcv",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Create Landed Cost Voucher"
+   "label": "Create Import File Cost Voucher"
   },
   {
    "default": "Pending",

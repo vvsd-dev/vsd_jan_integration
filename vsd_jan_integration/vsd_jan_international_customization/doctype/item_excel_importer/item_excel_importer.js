@@ -105,19 +105,24 @@ frappe.ui.form.on('Item Excel Importer', {
 				}).addClass('btn-danger');
 			}
 
-			// Administrator-only: wipe created Items from this run and reset to Pending
-			if (frappe.session.user === 'Administrator' && status !== 'Pending') {
+			// Administrator-only: reverse MKT/Mukechi docs from this Excel and reset to Pending
+			if (frappe.session.user === 'Administrator' && frm.doc.excel_file) {
 				frm.add_custom_button(__('Undo Import'), function() {
 					frappe.confirm(
 						__(
-							'UNDO will delete Items that were <b>Created</b> by this import (plus their draft Car Costings / Fixed JEs), clear the log, and reset status to <b>Pending</b> so you can Start Import again.<br><br>Updated existing Items are kept. This cannot be undone easily. Continue?'
+							'UNDO will delete documents created from this Excel:<br><br>' +
+							'• Purchase Invoices (by Supplier Invoice No)<br>' +
+							'• Import Files + Import File Cost Vouchers<br>' +
+							'• Expense / Fixed Costing Journal Entries<br>' +
+							'• Items that were <b>Created</b> by this import (Mukechi)<br><br>' +
+							'Updated existing Items are kept. Status resets to <b>Pending</b>. Continue?'
 						),
 						function() {
 							frappe.call({
 								method: 'vsd_jan_integration.vsd_jan_international_customization.doctype.item_excel_importer.item_excel_importer.undo_import',
 								args: { docname: frm.doc.name },
 								freeze: true,
-								freeze_message: __('Undoing import… deleting created Items'),
+								freeze_message: __('Undoing import… deleting created documents'),
 								callback: function(r) {
 									if (r.exc) return;
 									var msg = (r.message && r.message.message) || __('Import undone.');

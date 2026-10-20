@@ -101,6 +101,45 @@ def item_on_update(doc, method=None):
 
 
 # ---------------------------------------------------------------------------
+# Sales Invoice → Selling Costing JEs
+# ---------------------------------------------------------------------------
+
+
+def sales_invoice_on_submit(doc, method=None):
+	"""Post Selling / Both costing Journal Entries from vehicle SI lines."""
+	if frappe.flags.get("skip_selling_costing_hooks"):
+		return
+	try:
+		from vsd_jan_integration.vsd_jan_international_customization.utils.selling_costing import (
+			process_sales_invoice_selling_costing,
+		)
+
+		process_sales_invoice_selling_costing(doc)
+	except Exception:
+		frappe.log_error(
+			title=f"Selling Costing hook failed for SI {doc.name}",
+			message=frappe.get_traceback(),
+		)
+
+
+def sales_invoice_on_cancel(doc, method=None):
+	"""Cancel Selling Costing JEs created for this Sales Invoice."""
+	if frappe.flags.get("skip_selling_costing_hooks"):
+		return
+	try:
+		from vsd_jan_integration.vsd_jan_international_customization.utils.selling_costing import (
+			cancel_selling_journal_entries_for_si,
+		)
+
+		cancel_selling_journal_entries_for_si(doc)
+	except Exception:
+		frappe.log_error(
+			title=f"Selling Costing cancel hook failed for SI {doc.name}",
+			message=frappe.get_traceback(),
+		)
+
+
+# ---------------------------------------------------------------------------
 # Purchase Invoice (covers cars without BL)
 # ---------------------------------------------------------------------------
 

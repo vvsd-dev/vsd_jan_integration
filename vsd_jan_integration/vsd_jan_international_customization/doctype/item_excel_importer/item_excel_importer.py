@@ -114,6 +114,7 @@ def run_import_job(docname, retry_failed_only=False):
 				prev_failed_records=importer.get("failed_records"),
 				docname=docname,
 				import_file_number_format=import_file_number_format,
+				warehouse=importer.get("warehouse"),
 			)
 			summary = res["summary"]
 			status = "Completed" if res["errors"] == 0 else "Completed with Errors"
@@ -673,7 +674,17 @@ EXPENSE_FIELDS = [
 ]
 
 
-def process_mkt_statement(file_path, create_ifcv=False, auto_submit_pi=False, auto_submit_jv=False, retry_failed_only=False, prev_failed_records=None, docname=None, import_file_number_format="Invoice No"):
+def process_mkt_statement(
+	file_path,
+	create_ifcv=False,
+	auto_submit_pi=False,
+	auto_submit_jv=False,
+	retry_failed_only=False,
+	prev_failed_records=None,
+	docname=None,
+	import_file_number_format="Invoice No",
+	warehouse=None,
+):
 	start_time = time.time()
 
 	# Avoid full doctype cache clears — they stall the first invoice for seconds.
@@ -690,6 +701,7 @@ def process_mkt_statement(file_path, create_ifcv=False, auto_submit_pi=False, au
 			prev_failed_records=prev_failed_records,
 			docname=docname,
 			import_file_number_format=import_file_number_format,
+			warehouse=warehouse,
 			start_time=start_time,
 		)
 	finally:
@@ -705,6 +717,7 @@ def _process_mkt_statement_inner(
 	prev_failed_records=None,
 	docname=None,
 	import_file_number_format="Invoice No",
+	warehouse=None,
 	start_time=None,
 ):
 	start_time = start_time or time.time()
@@ -827,6 +840,7 @@ def _process_mkt_statement_inner(
 		start_time=start_time,
 		import_file_number_format=import_file_number_format,
 		total_cars=total_cars,
+		warehouse=warehouse,
 	)
 
 	car_res = run_car_updating_job(
@@ -916,7 +930,7 @@ def _process_mkt_statement_inner(
 # SCHEDULER / WORKER 1: INVOICES & JOURNAL ENTRIES
 # ==========================================
 
-def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_ifcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No", total_cars=0):
+def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_map, invoice_info, create_ifcv, auto_submit_pi, auto_submit_jv, total_invoices, start_time, import_file_number_format="Invoice No", total_cars=0, warehouse=None):
 	supplier_name = ensure_supplier("JAN JAPAN")
 	created_pi_logs = []
 	not_created_pi_logs = []
@@ -1028,12 +1042,16 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 	for _fn, charge_label in EXPENSE_FIELDS:
 		get_tax_expense_account(company, charge_label, supplier_currency, cache=tax_account_cache)
 
+	# Prefer warehouse chosen on Item Excel Importer (MKT Statement); else Stock Settings.
 	default_warehouse = (
-		frappe.db.get_value("Stock Settings", None, "default_warehouse")
+		(warehouse or "").strip()
+		or frappe.db.get_value("Stock Settings", None, "default_warehouse")
 		or frappe.db.get_value(
 			"Warehouse", {"company": company, "is_group": 0}, "name", order_by="creation asc"
 		)
 	)
+	if warehouse and warehouse.strip() and not frappe.db.exists("Warehouse", warehouse.strip()):
+		frappe.throw(_("Warehouse {0} not found").format(warehouse))
 	# Cached once — used for fast PI inserts (ignore_validate path)
 	pi_cost_center = get_company_cost_center(company)
 	pi_stock_expense_account = (
@@ -1282,10 +1300,12 @@ def run_invoice_and_journal_job(docname, invoice_cars_map, invoice_containers_ma
 				)
 				frappe.flags.mute_messages = True
 				if is_new_pi:
-					pi_doc.name = _mkt_pi_deterministic_name(inv_no, company)
+					# Use company/default Purchase Invoice naming series (not hash/MKTPINV names).
+					from frappe.model.naming import get_default_naming_series
+
+					if not pi_doc.get("naming_series"):
+						pi_doc.naming_series = get_default_naming_series("Purchase Invoice")
 					try:
-						pi_doc.insert(ignore_permissions=True, set_name=pi_doc.name)
-					except TypeError:
 						pi_doc.insert(ignore_permissions=True)
 					except frappe.DuplicateEntryError:
 						existing = frappe.db.get_value(
@@ -1630,11 +1650,10 @@ def create_or_update_expense_journal_entry(
 		jv_doc = frappe.new_doc("Journal Entry")
 		jv_doc.voucher_type = "Journal Entry"
 		jv_doc.company = company
-		# Deterministic name — avoids ACC-JV series lock during bulk MKT
-		import hashlib
+		# Default Journal Entry naming series (not hash/MKTJV names).
+		from frappe.model.naming import get_default_naming_series
 
-		digest = hashlib.md5(f"MKT|{inv_no}|{company}".encode()).hexdigest()[:12].upper()
-		jv_doc.name = f"MKTJV-{digest}"
+		jv_doc.naming_series = get_default_naming_series("Journal Entry")
 		is_new = True
 
 	jv_date = format_date(inv_date) or pi_doc.posting_date or frappe.utils.today()
@@ -1700,8 +1719,6 @@ def create_or_update_expense_journal_entry(
 
 		if is_new:
 			try:
-				jv_doc.insert(ignore_permissions=True, set_name=jv_doc.name)
-			except TypeError:
 				jv_doc.insert(ignore_permissions=True)
 			except frappe.DuplicateEntryError:
 				# Race / re-import — fall back to existing by cheque_no
@@ -1740,6 +1757,10 @@ def create_or_update_ifcv(import_file_name, posting_date=None):
 
 	Loads vehicles + posted expenses (submitted JE / non-stock PI lines) the same way
 	as Reload From Import File on the IFCV form. Does not submit — user reviews then submits.
+
+	Multi-IFCV: prefers an existing draft; if only submitted vouchers exist, creates a
+	new draft that excludes By Vehicle expenses already consumed by submitted peers
+	while still loading reusable BL/Formula expenses.
 	"""
 	try:
 		if not import_file_name:
@@ -1753,20 +1774,12 @@ def create_or_update_ifcv(import_file_name, posting_date=None):
 			load_from_import_file,
 		)
 
-		# Prefer existing draft; never overwrite a submitted IFCV
+		# Prefer existing draft; never overwrite a submitted IFCV — create a new draft instead
 		existing = frappe.db.get_value(
 			"Import File Cost Voucher",
 			{"import_file": import_file_name, "docstatus": 0},
 			"name",
 		)
-		if not existing:
-			submitted = frappe.db.get_value(
-				"Import File Cost Voucher",
-				{"import_file": import_file_name, "docstatus": 1},
-				"name",
-			)
-			if submitted:
-				return frappe.get_doc("Import File Cost Voucher", submitted)
 
 		if existing:
 			doc = frappe.get_doc("Import File Cost Voucher", existing)
@@ -1775,7 +1788,9 @@ def create_or_update_ifcv(import_file_name, posting_date=None):
 			doc.import_file = import_file_name
 			doc.posting_date = posting_date or frappe.utils.today()
 
-		data = load_from_import_file(doc.import_file)
+		data = load_from_import_file(
+			doc.import_file, exclude_ifcv=doc.name if existing else None
+		)
 		doc.set("vehicles", [])
 		doc.set("expenses", [])
 		doc.set("allocations", [])

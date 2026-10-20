@@ -1,0 +1,28 @@
+{
+  "name": "jan_ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && yarn copy-html-entry",
+    "preview": "vite preview",
+    "copy-html-entry": "cp ../vsd_jan_integration/public/jan_ui/index.html ../vsd_jan_integration/www/jan_ui.html"
+  },
+  "dependencies": {
+    "frappe-ui": "^0.1.278",
+    "vue": "^3.5.32",
+    "vue-router": "^4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "@vitejs/plugin-vue": "^6.0.6",
+    "@vue/tsconfig": "^0.9.1",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.12",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.8.0",
+    "vite": "^6.3.5",
+    "vue-tsc": "^2.2.8"
+  }
+}

@@ -8,6 +8,7 @@
   "excel_file",
   "import_type",
   "import_file_number_format",
+  "warehouse",
   "import_status",
   "total_invoices",
   "total_cars",
@@ -52,6 +53,15 @@
    "in_list_view": 1,
    "label": "Import File Number Format",
    "options": "Invoice No\nBL Number\nInvoice No - BL Number"
+  },
+  {
+   "depends_on": "eval:doc.import_type == 'MKT Statement' || doc.import_type == 'Auto Detect'",
+   "description": "Warehouse used on Purchase Invoice items for MKT Statement imports. Falls back to Stock Settings default when empty.",
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Warehouse",
+   "options": "Warehouse"
   },
   {
    "default": "0",

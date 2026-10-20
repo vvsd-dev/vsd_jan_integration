@@ -194,6 +194,8 @@ def load_from_item(docname=None, item=None, import_file=None):
 	doc.yen = flt(item_doc.get("custom_price"))
 	if not flt(doc.m3):
 		doc.m3 = flt(item_doc.get("custom_m3"))
+	if not flt(doc.expected_selling_price) and item_doc.meta.has_field("custom_selling_price"):
+		doc.expected_selling_price = flt(item_doc.get("custom_selling_price"))
 
 	if import_file:
 		doc.import_file = import_file

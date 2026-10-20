@@ -11,15 +11,18 @@ app_license = "mit"
 # required_apps = []
 
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "vsd_jan_integration",
-# 		"logo": "/assets/vsd_jan_integration/logo.png",
-# 		"title": "VSD Jan International Customization",
-# 		"route": "/vsd_jan_integration",
-# 		"has_permission": "vsd_jan_integration.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "vsd_jan_integration",
+		"logo": "/assets/vsd_jan_integration/jan_ui/vvsdtz_logo.png",
+		"title": "Jan UI",
+		"route": "/jan_ui",
+	}
+]
+
+website_route_rules = [
+	{"from_route": "/jan_ui/<path:app_path>", "to_route": "jan_ui"},
+]
 
 # Includes in <head>
 # ------------------
@@ -159,6 +162,10 @@ doc_events = {
 		"after_insert": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.purchase_invoice_after_save",
 		"on_update": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.purchase_invoice_after_save",
 		"on_submit": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.purchase_invoice_after_save",
+	},
+	"Sales Invoice": {
+		"on_submit": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.sales_invoice_on_submit",
+		"on_cancel": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.sales_invoice_on_cancel",
 	},
 	"Import File": {
 		"after_insert": "vsd_jan_integration.vsd_jan_international_customization.utils.fixed_costing_hooks.import_file_after_save",

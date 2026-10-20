@@ -11,6 +11,7 @@
   "region",
   "entry_mode",
   "allocation_scope",
+  "costing_side",
   "disabled",
   "column_break_1",
   "account",
@@ -72,6 +73,17 @@
    "reqd": 1
   },
   {
+   "default": "Purchase",
+   "description": "Purchase = IFCV / Fixed JE / landed cost. Selling = Sales Invoice submit JEs (e.g. City Levy, VAT). Both = available on purchase and selling flows.",
+   "fieldname": "costing_side",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Applicable On",
+   "options": "Purchase\nSelling\nBoth",
+   "reqd": 1
+  },
+  {
    "default": "0",
    "fieldname": "disabled",
    "fieldtype": "Check",
@@ -125,7 +137,7 @@
   },
   {
    "depends_on": "eval:doc.entry_mode=='Formula'",
-   "description": "Tokens like {line.tra_duty}. Only used when Entry Mode is Formula.",
+   "description": "Tokens like {line.tra_duty} or {header.expected_selling_price}. Only used when Entry Mode is Formula.",
    "fieldname": "formula",
    "fieldtype": "Small Text",
    "label": "Formula"

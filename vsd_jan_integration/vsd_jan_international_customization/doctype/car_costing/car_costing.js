@@ -18,6 +18,13 @@ frappe.ui.form.on('Car Costing', {
 	costing_date(frm) {
 		if (frm.doc.costing_date) fetchRates(frm, false);
 	},
+
+	expected_selling_price(frm) {
+		// City Levy / VAT formulas depend on ESP — recalc on change when doc saved
+		if (!frm.is_new() && flt(frm.doc.expected_selling_price) >= 0) {
+			recalc(frm);
+		}
+	},
 });
 
 function hideActualOnCarCosting(frm) {

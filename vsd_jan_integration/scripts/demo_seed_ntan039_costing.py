@@ -140,34 +140,28 @@ def _cost_center():
 	return frappe.db.get_value("Cost Center", {"company": company, "is_group": 0}, "name")
 
 
-def _abbr():
-	return frappe.db.get_value("Company", _company(), "abbr") or "JIL"
-
-
 def _accounts_for(code: str):
-	"""Resolve expense + payable from Costing Head, with sensible fallbacks."""
+	"""Resolve expense + payable from Costing Head only — no invent/remap."""
 	row = frappe.db.get_value(
 		"Costing",
 		{"costing_code": code, "disabled": 0},
 		["account", "payable_account", "costing_name"],
 		as_dict=True,
 	)
-	abbr = _abbr()
-	fallbacks = {
-		"tra_duty": (f"TRA Duty - {abbr}", f"Tra Duty Payable - {abbr}"),
-		"wharfage": (f"Wharfage - {abbr}", f"Wharfage Payable - {abbr}"),
-		"tpa": (f"TPA - {abbr}", f"Tpa Payable - {abbr}"),
-		"icd": (f"ICD - {abbr}", f"Icd Payable - {abbr}"),
-		"shipping_line": (f"Shipping Line - {abbr}", f"Shipping Line Payable - {abbr}"),
-	}
-	exp_fb, pay_fb = fallbacks.get(code, (None, None))
-	exp = (row.account if row else None) or exp_fb
-	pay = (row.payable_account if row else None) or pay_fb
+	if not row:
+		frappe.throw(f"Missing Costing head costing_code={code}")
+	exp = (row.account or "").strip() or None
+	pay = (row.payable_account or "").strip() or None
 	if not exp or not frappe.db.exists("Account", exp):
-		frappe.throw(f"Missing expense Account for costing_code={code} (tried {exp})")
+		frappe.throw(
+			f"Costing {code}: account missing or not in COA (got {exp!r}). "
+			"Select Costing.account on the master — do not invent accounts."
+		)
 	if not pay or not frappe.db.exists("Account", pay):
-		# last resort: company default payable
-		pay = frappe.db.get_value("Company", _company(), "default_payable_account")
+		frappe.throw(
+			f"Costing {code}: payable_account missing or not in COA (got {pay!r}). "
+			"Select Costing.payable_account on the master — do not invent accounts."
+		)
 	return exp, pay
 
 
@@ -212,7 +206,10 @@ def _ensure_import_file():
 
 
 def _configure_costing_heads():
-	"""Wharfage By Formula = TRA × 7% (demo expectation)."""
+	"""Wharfage By Formula = TRA × 7% (demo expectation).
+
+	Does not create or remap Costing.payable_account — use what is selected on Costing.
+	"""
 	if frappe.db.exists("Costing", "wharfage"):
 		frappe.db.set_value("Costing", "wharfage", "allocation_scope", "By Formula", update_modified=False)
 		frappe.db.set_value(
@@ -224,6 +221,7 @@ def _configure_costing_heads():
 		)
 	if frappe.db.exists("Costing", "tra_duty"):
 		frappe.db.set_value("Costing", "tra_duty", "allocation_scope", "By Vehicle", update_modified=False)
+
 	frappe.db.commit()
 
 
@@ -467,12 +465,17 @@ def create_actual_jes(cars_resolved: list):
 
 def create_fixed_jes(item_codes: list):
 	from vsd_jan_integration.vsd_jan_international_customization.utils.mkt_fixed_costing import (
+		create_or_update_fixed_costing_journal_entry,
 		ensure_fixed_costing_for_items,
+		ensure_journal_entry_payable_parties,
+		fixed_je_needs_recreate,
+		resolve_supplier_for_fixed_je,
 	)
 
 	cc = _cost_center()
 	res = ensure_fixed_costing_for_items(item_codes, auto_submit_jv=False, import_file=IMPORT_FILE)
 	print("fixed JEs created", len(res.get("journal_entries") or []), "errors", res.get("errors"))
+	supplier = resolve_supplier_for_fixed_je(import_file=IMPORT_FILE)
 	submitted = []
 	for je in res.get("journal_entries") or []:
 		frappe.db.sql(
@@ -483,6 +486,37 @@ def create_fixed_jes(item_codes: list):
 			frappe.db.set_value("Journal Entry", je, "import_file", IMPORT_FILE, update_modified=False)
 		ds = frappe.db.get_value("Journal Entry", je, "docstatus")
 		if ds == 0:
+			ensure_journal_entry_payable_parties(
+				je, supplier=supplier, import_file=IMPORT_FILE
+			)
+			frappe.db.commit()
+			# Stale drafts that credit Creditors / wrong payables — recreate from Costing masters
+			if fixed_je_needs_recreate(je, supplier=supplier):
+				item_code = None
+				if frappe.db.has_column("Journal Entry", "custom_item"):
+					item_code = frappe.db.get_value("Journal Entry", je, "custom_item")
+				cheque = frappe.db.get_value("Journal Entry", je, "cheque_no") or ""
+				if not item_code and cheque.startswith("FIXED|"):
+					item_code = cheque[6:]
+				print(f"  recreate broken FIXED JE {je} (Costing account vs payable)")
+				frappe.delete_doc("Journal Entry", je, force=1, ignore_permissions=True)
+				frappe.db.commit()
+				if item_code:
+					je, _ = create_or_update_fixed_costing_journal_entry(
+						item_code, import_file=IMPORT_FILE, auto_submit=False
+					)
+					frappe.db.sql(
+						"UPDATE `tabJournal Entry Account` SET cost_center=%s WHERE parent=%s AND IFNULL(cost_center,'')=''",
+						(cc, je),
+					)
+					if frappe.db.has_column("Journal Entry", "import_file"):
+						frappe.db.set_value(
+							"Journal Entry", je, "import_file", IMPORT_FILE, update_modified=False
+						)
+					ensure_journal_entry_payable_parties(
+						je, supplier=supplier, import_file=IMPORT_FILE
+					)
+					frappe.db.commit()
 			doc = frappe.get_doc("Journal Entry", je)
 			doc.flags.ignore_permissions = True
 			doc.submit()

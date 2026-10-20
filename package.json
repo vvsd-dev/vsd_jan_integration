@@ -1,0 +1,11 @@
+{
+  "name": "vsd_jan_integration",
+  "version": "1.0.0",
+  "description": "VSD Jan International Customization",
+  "scripts": {
+    "postinstall": "cd jan_ui && yarn install",
+    "dev": "cd jan_ui && yarn dev",
+    "build": "cd jan_ui && yarn build"
+  },
+  "license": "MIT"
+}

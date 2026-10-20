@@ -16,7 +16,8 @@ TOKEN_PATTERN = re.compile(r"\{([a-zA-Z0-9_.]+)\}")
 # TOTAL EXP USD = TSH TO USD + Japan lines
 # TOTAL COST USD = DUTY USD + TOTAL EXP USD + YEN IN USD
 # COST (landed) = TOTAL COST USD * exchange
-# (Excel also adds City Levy + VAT from selling price — not in projected COST)
+# City Levy + VAT are Selling-side formula heads driven by
+# {header.expected_selling_price} (Excel AS → AM/AO); not in landed COST.
 HEADER_FORMULAS = {
 	"tsh_to_usd": "{header.total_exp_tsh} / {header.exchange_rate}",
 	"yen_in_usd": "{header.yen} / {header.yen_exchange_rate}",
@@ -101,30 +102,60 @@ def _toposort(heads):
 	return out
 
 
-def get_heads(region=None):
+def get_heads(region=None, costing_side=None):
+	"""Return active Costing heads.
+
+	costing_side:
+	  None → all sides
+	  \"Purchase\" → Purchase + Both
+	  \"Selling\" → Selling + Both
+	  exact value otherwise
+	"""
 	filters = {"disabled": 0}
 	if region:
 		filters["region"] = region
-	return [
-		frappe._dict(h)
-		for h in frappe.get_all(
-			"Costing",
-			filters=filters,
-			fields=[
-				"name",
-				"costing_code",
-				"costing_name",
-				"entry_mode",
-				"allocation_scope",
-				"account",
-				"currency",
-				"default_projected_amount",
-				"formula",
-				"depends_on",
-			],
-			order_by="costing_name asc, costing_code asc",
-		)
+	fields = [
+		"name",
+		"costing_code",
+		"costing_name",
+		"entry_mode",
+		"allocation_scope",
+		"account",
+		"payable_account",
+		"currency",
+		"default_projected_amount",
+		"formula",
+		"depends_on",
 	]
+	if frappe.db.has_column("Costing", "costing_side"):
+		fields.append("costing_side")
+
+	rows = frappe.get_all(
+		"Costing",
+		filters=filters,
+		fields=fields,
+		order_by="costing_name asc, costing_code asc",
+	)
+
+	out = []
+	for h in rows:
+		side = (h.get("costing_side") or "Purchase") if isinstance(h, dict) else (getattr(h, "costing_side", None) or "Purchase")
+		if costing_side == "Purchase" and side not in ("Purchase", "Both"):
+			continue
+		if costing_side == "Selling" and side not in ("Selling", "Both"):
+			continue
+		if costing_side and costing_side not in ("Purchase", "Selling") and side != costing_side:
+			continue
+		out.append(frappe._dict(h))
+	return out
+
+
+def is_purchase_side(side):
+	return (side or "Purchase") in ("Purchase", "Both")
+
+
+def is_selling_side(side):
+	return (side or "Purchase") in ("Selling", "Both")
 
 
 def load_template_lines(region):
@@ -214,6 +245,7 @@ def recalculate_car_costing(doc):
 	exchange_rate = _flt(_doc_get(doc, "exchange_rate"))
 	yen = _flt(_doc_get(doc, "yen")) or (_flt(item.custom_price) if item else 0)
 	yen_exchange_rate = _flt(_doc_get(doc, "yen_exchange_rate"))
+	expected_selling_price = _flt(_doc_get(doc, "expected_selling_price"))
 
 	ctx = {
 		"line": line_ctx,
@@ -224,6 +256,7 @@ def recalculate_car_costing(doc):
 			"duty_usd": 0,
 			"total_exp_tsh": 0,
 			"total_exp_usd": 0,
+			"expected_selling_price": expected_selling_price,
 		},
 	}
 
@@ -238,10 +271,18 @@ def recalculate_car_costing(doc):
 		line_ctx[h.costing_code] = _flt(line.projected_amount)
 
 	# Excel TOTAL EXP TSH excludes TRA DUTY (col Y = Q..X only)
+	# and excludes Selling-side tax lines (City Levy / VAT — cols AM/AO).
 	tz_lines = list(doc.get("tz_costing_lines") or [])
 	japan_lines = list(doc.get("japan_costing_lines") or [])
+	selling_only = {
+		h.costing_code
+		for h in heads
+		if (getattr(h, "costing_side", None) or "Purchase") == "Selling"
+	}
 	doc.total_exp_tsh = sum(
-		_flt(l.projected_amount) for l in tz_lines if l.costing_code != "tra_duty"
+		_flt(l.projected_amount)
+		for l in tz_lines
+		if l.costing_code != "tra_duty" and l.costing_code not in selling_only
 	)
 	ctx["header"]["total_exp_tsh"] = _flt(doc.total_exp_tsh)
 
@@ -260,6 +301,11 @@ def recalculate_car_costing(doc):
 		value = _eval(HEADER_FORMULAS[fld], ctx)
 		setattr(doc, fld, value)
 		ctx["header"][fld] = value
+
+	# Surface planned selling price when set (Excel AS); else PRICE mirrors landed COST
+	if expected_selling_price:
+		doc.price = expected_selling_price
+		ctx["header"]["price"] = expected_selling_price
 
 	doc.yen = yen
 	if item and item.custom_purchase_date:

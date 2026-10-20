@@ -223,7 +223,8 @@ def _ensure_payable_account(company: str, tax_name: str, currency: str | None = 
 			return existing
 
 	if not parent:
-		return frappe.db.get_value("Company", company, "default_payable_account")
+		# Do not fall back to company Creditors — Fixed Costing needs named Other Payable
+		return None
 
 	try:
 		acc = frappe.new_doc("Account")

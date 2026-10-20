@@ -4,7 +4,7 @@
  "creation": "2026-09-05 11:10:18.847192",
  "doctype": "DocType",
  "engine": "InnoDB",
- "field_order": [
+  "field_order": [
   "naming_series",
   "item",
   "import_file",
@@ -17,6 +17,7 @@
   "model",
   "m3",
   "yen",
+  "expected_selling_price",
   "section_break_tz",
   "tz_costing_lines",
   "section_break_japan",
@@ -119,6 +120,14 @@
    "label": "YEN",
    "options": "JPY",
    "read_only": 1
+  },
+  {
+   "description": "Selling price (TZS) used by Selling/Both formula heads (City Levy Tax, VAT). On Sales Invoice submit, SI rate fills this when empty.",
+   "fieldname": "expected_selling_price",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Expected Selling Price",
+   "options": "TZS"
   },
   {
    "fieldname": "section_break_tz",

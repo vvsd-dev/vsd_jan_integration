@@ -867,6 +867,27 @@ class ImportFileCostVoucher(Document):
 			return rows
 		return get_vehicles_for_import_file(self.import_file)
 
+	def _bl_vehicle_rows(self):
+		"""Full Import File / BL vehicle set (Purchase Invoices + BL match).
+
+		Used as the denominator for By BL Equal / M3 / Formula even when this IFCV
+		only lists a subset of cars.
+		"""
+		all_rows = get_vehicles_for_import_file(self.import_file) if self.import_file else []
+		if all_rows:
+			return [
+				frappe._dict(
+					{
+						"name": v.name,
+						"custom_m3": flt(v.get("custom_m3")),
+						"custom_chassis_no": (v.get("custom_chassis_no") or "").strip(),
+					}
+				)
+				for v in all_rows
+				if v.name
+			]
+		return self._vehicle_rows()
+
 	def _allocation_dict(self, item_name, exp, amount, chassis_no=None):
 		"""Build an allocation row; always set chassis_no (fetch_from does not run on append)."""
 		if not chassis_no:
@@ -931,13 +952,17 @@ class ImportFileCostVoucher(Document):
 				self.append("allocations", a)
 			return
 
-		total_m3 = sum(flt(i.custom_m3) for i in items) or 0
+		# BL-wide denominator (full PI/BL set); IFCV may only include a subset
+		bl_items = self._bl_vehicle_rows() or items
+		bl_total_m3 = sum(flt(i.custom_m3) for i in bl_items) or 0
+		bl_count = len(bl_items) or len(items)
 		item_names = {i.name for i in items}
 		chassis_to_item = {
 			(i.custom_chassis_no or frappe.db.get_value("Item", i.name, "custom_chassis_no") or "").upper(): i.name
 			for i in items
 		}
 		formula_expenses = []
+		exclude_name = self.name if getattr(self, "name", None) else None
 
 		for exp in self.expenses or []:
 			if not flt(exp.amount):
@@ -975,11 +1000,23 @@ class ImportFileCostVoucher(Document):
 					self.append("allocations", self._allocation_dict(matched, exp, exp.amount, ch))
 				continue
 
+			# By BL Equal / By BL M3: share of full BL, only rows for cars on this IFCV
+			already = get_bl_allocated_items(
+				self.import_file,
+				exp.source,
+				costing_head=exp.costing_head,
+				expense_account=exp.expense_account,
+				exclude_ifcv=exclude_name,
+			)
 			for item in items:
+				if item.name in already:
+					continue
 				if exp.distribution_method == "By BL M3":
-					amount = (flt(exp.amount) * (flt(item.custom_m3) / total_m3)) if total_m3 else 0
+					amount = (
+						(flt(exp.amount) * (flt(item.custom_m3) / bl_total_m3)) if bl_total_m3 else 0
+					)
 				else:
-					amount = flt(exp.amount) / len(items)
+					amount = flt(exp.amount) / bl_count if bl_count else 0
 
 				self.append(
 					"allocations",
@@ -988,33 +1025,84 @@ class ImportFileCostVoucher(Document):
 
 		# Formula heads (e.g. Wharfage = TRA Duty × 7%): bulk JE at BL, split by formula
 		if formula_expenses:
-			self._distribute_formula_expenses(formula_expenses, items)
+			self._distribute_formula_expenses(formula_expenses, items, bl_items)
 
-	def _distribute_formula_expenses(self, formula_expenses, items):
+	def _sibling_line_amounts_by_item(self, bl_items):
+		"""Costing-code amounts per item for formula context (this IFCV + submitted peers)."""
+		from collections import defaultdict
+
+		line_by_item = defaultdict(dict)
+
+		def _add(item_code, costing_head, amount):
+			if not item_code or not costing_head or not flt(amount):
+				return
+			code = frappe.db.get_value("Costing", costing_head, "costing_code") or costing_head
+			line_by_item[item_code][code] = line_by_item[item_code].get(code, 0) + flt(amount)
+
+		for a in self.allocations or []:
+			_add(a.item, a.costing_head, a.amount)
+
+		if not self.import_file:
+			return line_by_item
+
+		exclude = self.name if getattr(self, "name", None) else None
+		peer_names = frappe.get_all(
+			"Import File Cost Voucher",
+			filters={"import_file": self.import_file, "docstatus": 1},
+			pluck="name",
+		)
+		for peer_name in peer_names:
+			if exclude and peer_name == exclude:
+				continue
+			for a in frappe.get_all(
+				"Import File Cost Voucher Allocation",
+				filters={"parent": peer_name},
+				fields=["item", "costing_head", "amount"],
+			):
+				_add(a.item, a.costing_head, a.amount)
+
+		# Fill gaps from By Vehicle Manual expenses still posted on Import File JEs
+		bl_names = {i.name for i in (bl_items or [])}
+		for exp in get_posted_expenses(self.import_file, exclude_ifcv=exclude, apply_oneshot_filter=False):
+			if not is_oneshot_distribution(
+				exp.get("distribution_method"), exp.get("allocation_scope")
+			):
+				continue
+			item_code = exp.get("linked_item")
+			if not item_code or item_code not in bl_names:
+				continue
+			if item_code in line_by_item and (
+				exp.get("costing_code") in line_by_item[item_code]
+				or (exp.get("costing_head") or "") in line_by_item[item_code]
+			):
+				continue
+			_add(item_code, exp.get("costing_head"), exp.get("amount"))
+
+		return line_by_item
+
+	def _distribute_formula_expenses(self, formula_expenses, items, bl_items=None):
 		"""Split BL-bulk Formula expenses using Costing.formula and sibling allocations.
 
 		Example: Wharfage formula `{line.tra_duty} * 0.07` with TRA already allocated
 		per car → Noah TRA 9,600,000 → Wharfage 672,000 (not equal BL share).
-		"""
-		from collections import defaultdict
 
+		Shares are computed over the full BL vehicle set; only IFCV cars get rows.
+		"""
 		from vsd_jan_integration.vsd_jan_international_customization.utils.costing_engine import (
 			_eval,
 		)
 
-		line_by_item = defaultdict(dict)
-		for a in self.allocations or []:
-			if not a.item or not a.costing_head:
-				continue
-			code = frappe.db.get_value("Costing", a.costing_head, "costing_code") or a.costing_head
-			line_by_item[a.item][code] = line_by_item[a.item].get(code, 0) + flt(a.amount)
+		bl_items = bl_items or items
+		line_by_item = self._sibling_line_amounts_by_item(bl_items)
+		exclude_name = self.name if getattr(self, "name", None) else None
+		ifcv_names = {i.name for i in items}
 
 		for exp in formula_expenses:
 			formula = None
 			if exp.costing_head:
 				formula = frappe.db.get_value("Costing", exp.costing_head, "formula")
 			raw = {}
-			for item in items:
+			for item in bl_items:
 				ctx = {"line": dict(line_by_item.get(item.name) or {})}
 				try:
 					raw[item.name] = flt(_eval(formula, ctx)) if formula else 0.0
@@ -1025,11 +1113,23 @@ class ImportFileCostVoucher(Document):
 				(frappe.db.get_value("Costing", exp.costing_head, "costing_code") if exp.costing_head else None)
 				or (exp.costing_head or "")
 			)
+			already = get_bl_allocated_items(
+				self.import_file,
+				exp.source,
+				costing_head=exp.costing_head,
+				expense_account=exp.expense_account,
+				exclude_ifcv=exclude_name,
+			)
+			bl_count = len(bl_items) or len(items)
 			for item in items:
+				if item.name in already:
+					continue
+				if item.name not in ifcv_names:
+					continue
 				if total_raw:
-					amount = flt(exp.amount) * (raw[item.name] / total_raw)
+					amount = flt(exp.amount) * (raw.get(item.name, 0) / total_raw)
 				else:
-					amount = flt(exp.amount) / len(items) if items else 0
+					amount = flt(exp.amount) / bl_count if bl_count else 0
 				self.append(
 					"allocations",
 					self._allocation_dict(item.name, exp, amount, item.custom_chassis_no),
@@ -1315,11 +1415,133 @@ def distribution_method_from_costing(allocation_scope, entry_mode=None):
 	return "By BL Equal"
 
 
-def get_posted_expenses(import_file):
+def is_oneshot_distribution(distribution_method=None, allocation_scope=None):
+	"""Per-vehicle expenses are consumed by the first submitted IFCV that uses them."""
+	method = (distribution_method or "").strip()
+	scope = (allocation_scope or "").strip()
+	return method == "By Vehicle Manual" or scope == "By Vehicle"
+
+
+def is_bl_wide_distribution(distribution_method=None, allocation_scope=None):
+	"""BL / Formula expenses stay reusable; shares use the full BL vehicle set."""
+	method = (distribution_method or "").strip()
+	scope = (allocation_scope or "").strip()
+	if method in ("By BL Equal", "By BL M3", "By Formula"):
+		return True
+	if scope in ("By BL Equal", "By BL M3", "By BL", "By Formula"):
+		return True
+	return False
+
+
+def expense_consumption_key(source, expense_account=None, linked_item=None, costing_head=None):
+	"""Match posted JE/PI expense lines to IFCV expense rows."""
+	return (
+		(source or "").strip(),
+		(expense_account or "").strip(),
+		(linked_item or "").strip(),
+		(costing_head or "").strip(),
+	)
+
+
+def get_consumed_oneshot_expense_keys(import_file, exclude_ifcv=None):
+	"""Keys of By Vehicle expenses already used on submitted IFCVs for this Import File.
+
+	Tracking: a submitted IFCV expense row with By Vehicle Manual (or Costing scope
+	By Vehicle) marks its (source, expense_account, linked_item, costing_head) as
+	consumed. Cancelled IFCVs do not consume. Drafts do not consume.
+	"""
+	if not import_file:
+		return set()
+
+	keys = set()
+	peer_names = frappe.get_all(
+		"Import File Cost Voucher",
+		filters={"import_file": import_file, "docstatus": 1},
+		pluck="name",
+	)
+	for peer_name in peer_names:
+		if exclude_ifcv and peer_name == exclude_ifcv:
+			continue
+		for exp in frappe.get_all(
+			"Import File Cost Voucher Expense",
+			filters={"parent": peer_name},
+			fields=[
+				"source",
+				"expense_account",
+				"linked_item",
+				"costing_head",
+				"distribution_method",
+				"allocation_scope",
+			],
+		):
+			if not is_oneshot_distribution(exp.distribution_method, exp.allocation_scope):
+				continue
+			if not exp.source:
+				continue
+			keys.add(
+				expense_consumption_key(
+					exp.source, exp.expense_account, exp.linked_item, exp.costing_head
+				)
+			)
+	return keys
+
+
+def get_bl_allocated_items(
+	import_file, source, costing_head=None, expense_account=None, exclude_ifcv=None
+):
+	"""Items that already received a share of this BL/Formula expense on a submitted IFCV.
+
+	Prevents double-allocating the same BL source to the same car across vouchers
+	while still allowing the source to appear on later IFCVs for remaining cars.
+	"""
+	if not import_file or not source:
+		return set()
+
+	items = set()
+	peer_names = frappe.get_all(
+		"Import File Cost Voucher",
+		filters={"import_file": import_file, "docstatus": 1},
+		pluck="name",
+	)
+	for peer_name in peer_names:
+		if exclude_ifcv and peer_name == exclude_ifcv:
+			continue
+		# Match expense row(s) for this source on the peer, then their allocations
+		exp_rows = frappe.get_all(
+			"Import File Cost Voucher Expense",
+			filters={"parent": peer_name, "source": source},
+			fields=["idx", "costing_head", "expense_account", "distribution_method", "allocation_scope"],
+		)
+		matched_idx = set()
+		for exp in exp_rows:
+			if not is_bl_wide_distribution(exp.distribution_method, exp.allocation_scope):
+				continue
+			if costing_head and exp.costing_head and exp.costing_head != costing_head:
+				continue
+			if expense_account and exp.expense_account and exp.expense_account != expense_account:
+				continue
+			matched_idx.add(exp.idx)
+		if not matched_idx:
+			continue
+		for a in frappe.get_all(
+			"Import File Cost Voucher Allocation",
+			filters={"parent": peer_name, "source_row": ["in", list(matched_idx)]},
+			fields=["item"],
+		):
+			if a.item:
+				items.add(a.item)
+	return items
+
+
+def get_posted_expenses(import_file, exclude_ifcv=None, apply_oneshot_filter=True):
 	"""Same source as csf_tz Landed Cost Voucher, plus Costing account mapping.
 
 	Excludes Stock In Hand / Stock accounts (car purchase value, not landed expenses).
 	Distribution method comes from Costing.allocation_scope.
+
+	Multi-IFCV rules:
+	- By Vehicle (one-shot): omit sources already used on submitted IFCVs.
+	- By BL Equal / M3 / Formula: always include (reusable across partial-vehicle IFCVs).
 	"""
 	if not import_file:
 		return []
@@ -1368,23 +1590,37 @@ def get_posted_expenses(import_file):
 		as_dict=True,
 	)
 
-	heads_by_account = {
-		h.account: h
-		for h in frappe.get_all(
-			"Costing",
-			filters={"disabled": 0, "account": ["is", "set"]},
-			fields=[
-				"name",
-				"costing_code",
-				"account",
-				"allocation_scope",
-				"currency",
-				"entry_mode",
-				"formula",
-			],
-		)
-		if h.account
-	}
+	head_fields = [
+		"name",
+		"costing_code",
+		"account",
+		"allocation_scope",
+		"currency",
+		"entry_mode",
+		"formula",
+	]
+	if frappe.db.has_column("Costing", "costing_side"):
+		head_fields.append("costing_side")
+
+	heads_by_account = {}
+	for h in frappe.get_all(
+		"Costing",
+		filters={"disabled": 0, "account": ["is", "set"]},
+		fields=head_fields,
+	):
+		if not h.account:
+			continue
+		# Selling-only heads post from Sales Invoice — skip IFCV expense mapping
+		side = h.get("costing_side") or "Purchase"
+		if side == "Selling":
+			continue
+		heads_by_account[h.account] = h
+
+	consumed = (
+		get_consumed_oneshot_expense_keys(import_file, exclude_ifcv=exclude_ifcv)
+		if apply_oneshot_filter
+		else set()
+	)
 
 	out = []
 	for row in je_rows + pi_rows:
@@ -1402,6 +1638,23 @@ def get_posted_expenses(import_file):
 			or (head.currency if head else None)
 			or frappe.db.get_value("Account", row.expense_account, "account_currency")
 		)
+		costing_head = head.name if head else None
+		linked_item = row.linked_item
+		if apply_oneshot_filter and is_oneshot_distribution(
+			method, head.allocation_scope if head else None
+		):
+			key = expense_consumption_key(
+				row.source, row.expense_account, linked_item, costing_head
+			)
+			# Also match peers that stored blank linked_item / costing_head
+			alt_keys = {
+				key,
+				expense_consumption_key(row.source, row.expense_account, linked_item, None),
+				expense_consumption_key(row.source, row.expense_account, None, costing_head),
+				expense_consumption_key(row.source, row.expense_account, None, None),
+			}
+			if consumed & alt_keys:
+				continue
 		out.append(
 			{
 				"expense_account": row.expense_account,
@@ -1409,12 +1662,12 @@ def get_posted_expenses(import_file):
 				"amount": flt(row.amount),
 				"currency": currency,
 				"source": row.source,
-				"costing_head": head.name if head else None,
+				"costing_head": costing_head,
 				"costing_code": head.costing_code if head else None,
 				"allocation_scope": head.allocation_scope if head else None,
 				"entry_mode": head.entry_mode if head else None,
 				"distribution_method": method,
-				"linked_item": row.linked_item,
+				"linked_item": linked_item,
 			}
 		)
 	return out
@@ -1459,8 +1712,12 @@ def item_query_for_import_file(doctype, txt, searchfield, start, page_len, filte
 
 
 @frappe.whitelist()
-def load_from_import_file(import_file, distribution_basis=None):
-	"""Load vehicles + expenses. distribution_basis is ignored — Costing controls split method."""
+def load_from_import_file(import_file, distribution_basis=None, exclude_ifcv=None):
+	"""Load vehicles + expenses. distribution_basis is ignored — Costing controls split method.
+
+	exclude_ifcv: when reloading an existing voucher, do not treat it as a consumer
+	of oneshot expenses (only submitted peers consume).
+	"""
 	if not import_file:
 		frappe.throw(_("Import File is required"))
 
@@ -1484,7 +1741,7 @@ def load_from_import_file(import_file, distribution_basis=None):
 			}
 		)
 
-	expenses = get_posted_expenses(import_file)
+	expenses = get_posted_expenses(import_file, exclude_ifcv=exclude_ifcv)
 	return {"vehicles": vehicles, "expenses": expenses}
 
 
@@ -1495,7 +1752,7 @@ def reload_from_import_file(docname):
 	if not doc.import_file:
 		frappe.throw(_("Import File is required"))
 
-	data = load_from_import_file(doc.import_file)
+	data = load_from_import_file(doc.import_file, exclude_ifcv=doc.name)
 	doc.set("vehicles", [])
 	doc.set("expenses", [])
 	doc.set("allocations", [])

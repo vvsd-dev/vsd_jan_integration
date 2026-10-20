@@ -8,6 +8,8 @@ Rules:
 - Fixed JE (expected / payable) only when the car is tied to an Import File via:
   - Item.custom_bl resolving to Import File, or
   - Purchase Invoice.import_file (covers cars without BL).
+- JE debit = Costing.account, credit = Costing.payable_account exactly as
+  selected on each Costing master row — never create, ensure, or remap GL accounts.
 """
 
 from __future__ import annotations
@@ -89,33 +91,179 @@ def pick_import_file(item_code, preferred=None, prefer_source=""):
 	return resolve_import_file_for_item_via_pi(item_code)
 
 
+def resolve_supplier_for_fixed_je(import_file=None, item_code=None):
+	"""Supplier for Fixed JE lines whose payable account_type requires a party.
+
+	Order: Import File.supplier_name → latest PI for item → JAN JAPAN.
+	"""
+	import_file = (import_file or "").strip() or None
+	if import_file and frappe.db.has_column("Import File", "supplier_name"):
+		supplier = (frappe.db.get_value("Import File", import_file, "supplier_name") or "").strip()
+		if supplier and frappe.db.exists("Supplier", supplier):
+			return supplier
+
+	if item_code:
+		rows = frappe.db.sql(
+			"""
+			SELECT pi.supplier
+			FROM `tabPurchase Invoice Item` pii
+			INNER JOIN `tabPurchase Invoice` pi ON pi.name = pii.parent
+			WHERE pii.item_code = %s
+				AND IFNULL(pi.supplier, '') != ''
+				AND pi.docstatus < 2
+			ORDER BY pi.modified DESC
+			LIMIT 1
+			""",
+			item_code,
+		)
+		if rows and rows[0][0] and frappe.db.exists("Supplier", rows[0][0]):
+			return rows[0][0]
+
+	if frappe.db.exists("Supplier", "JAN JAPAN"):
+		return "JAN JAPAN"
+	return None
+
+
+def _account_party_type(account):
+	"""ERPNext requires party on Receivable/Payable account lines."""
+	if not account:
+		return None
+	acc_type = frappe.db.get_value("Account", account, "account_type")
+	if acc_type == "Payable":
+		return "Supplier"
+	if acc_type == "Receivable":
+		return "Customer"
+	return None
+
+
+def ensure_journal_entry_payable_parties(je_name, supplier=None, import_file=None, item_code=None):
+	"""Backfill party_type/party on draft JE rows that use Payable/Receivable accounts.
+
+	Only for account_type Payable/Receivable. Skips rows whose account currency
+	does not match the supplier's outstanding currency (ERPNext would reject).
+
+	Returns True if any row was updated.
+	"""
+	if not je_name:
+		return False
+	supplier = (supplier or "").strip() or resolve_supplier_for_fixed_je(
+		import_file=import_file, item_code=item_code
+	)
+	company = frappe.db.get_value("Journal Entry", je_name, "company")
+	party_curr = _party_account_currency("Supplier", supplier, company) if supplier and company else None
+	rows = frappe.get_all(
+		"Journal Entry Account",
+		filters={"parent": je_name},
+		fields=["name", "account", "party_type", "party"],
+	)
+	changed = False
+	for r in rows:
+		party_type = _account_party_type(r.account)
+		if party_type != "Supplier":
+			continue
+		if not supplier:
+			continue
+		acc_curr = frappe.db.get_value("Account", r.account, "account_currency")
+		if party_curr and acc_curr and party_curr != acc_curr:
+			# Currency mismatch — party cannot be set; leave for recreate/coerce
+			continue
+		if (r.party_type or "") == "Supplier" and (r.party or "").strip():
+			continue
+		frappe.db.set_value(
+			"Journal Entry Account",
+			r.name,
+			{"party_type": "Supplier", "party": supplier},
+			update_modified=False,
+		)
+		changed = True
+	return changed
+
+
+def fixed_je_needs_recreate(je_name, supplier=None, expected_payables=None):
+	"""True when a draft Fixed JE must be rebuilt.
+
+	Rebuild when credit lines still hit Creditors*, miss Costing.payable_account,
+	or use Payable/Receivable without a valid matching-currency party.
+	"""
+	if not je_name:
+		return False
+	ds = frappe.db.get_value("Journal Entry", je_name, "docstatus")
+	if ds != 0:
+		return False
+	company = frappe.db.get_value("Journal Entry", je_name, "company")
+	party_curr = _party_account_currency("Supplier", supplier, company) if supplier and company else None
+	rows = frappe.get_all(
+		"Journal Entry Account",
+		filters={"parent": je_name},
+		fields=["account", "party_type", "party", "credit"],
+	)
+	credit_accounts = set()
+	for r in rows:
+		if flt(r.credit) <= 0:
+			continue
+		acc = (r.account or "").strip()
+		credit_accounts.add(acc)
+		# Legacy drafts dumped all Fixed credits onto company Creditors
+		if acc.startswith("Creditors"):
+			return True
+		party_type = _account_party_type(acc)
+		if not party_type:
+			continue
+		if not (r.party_type and r.party):
+			return True
+		acc_curr = frappe.db.get_value("Account", acc, "account_currency")
+		if party_curr and acc_curr and party_curr != acc_curr:
+			return True
+	if expected_payables is not None:
+		expected = {a for a in expected_payables if a}
+		if expected and not expected.issubset(credit_accounts):
+			return True
+	return False
+
+
 def get_fixed_costing_heads():
 	"""Fixed heads whose **Actual** posts per vehicle (Costing.allocation_scope=By Vehicle).
 
 	Heads with Actual By BL (e.g. CLEARING CONTAINER) stay Fixed for Car Costing
 	Expected defaults, but are excluded here so Actual is uploaded as one BL JE.
+
+	Purchase / Both only — Selling-only heads post from Sales Invoice submit.
+	Both Costing.account and Costing.payable_account must already be set;
+	Fixed JEs never invent or remap GL accounts.
 	"""
-	return frappe.get_all(
+	filters = {
+		"disabled": 0,
+		"entry_mode": "Fixed",
+		"allocation_scope": "By Vehicle",
+		"default_projected_amount": [">", 0],
+		"account": ["is", "set"],
+		"payable_account": ["is", "set"],
+	}
+	fields = [
+		"name",
+		"costing_code",
+		"costing_name",
+		"account",
+		"payable_account",
+		"currency",
+		"default_projected_amount",
+	]
+	if frappe.db.has_column("Costing", "costing_side"):
+		fields.append("costing_side")
+
+	rows = frappe.get_all(
 		"Costing",
-		filters={
-			"disabled": 0,
-			"entry_mode": "Fixed",
-			"allocation_scope": "By Vehicle",
-			"default_projected_amount": [">", 0],
-			"account": ["is", "set"],
-			"payable_account": ["is", "set"],
-		},
-		fields=[
-			"name",
-			"costing_code",
-			"costing_name",
-			"account",
-			"payable_account",
-			"currency",
-			"default_projected_amount",
-		],
+		filters=filters,
+		fields=fields,
 		order_by="costing_name asc",
 	)
+	out = []
+	for h in rows:
+		side = h.get("costing_side") or "Purchase"
+		if side not in ("Purchase", "Both"):
+			continue
+		out.append(h)
+	return out
 
 
 def ensure_draft_car_costing(item_code, import_file=None, force_reload=False):
@@ -174,12 +322,22 @@ def _buying_rate(from_currency, to_currency, rate_cache, get_exchange_rate):
 	return rate
 
 
-def _build_fixed_je_template(company, heads=None):
+def _party_account_currency(party_type, party, company):
+	try:
+		from erpnext.accounts.party import get_party_account_currency
+
+		return get_party_account_currency(party_type, party, company)
+	except Exception:
+		return None
+
+
+def _build_fixed_je_template(company, heads=None, supplier=None):
 	"""Precompute Fixed Costing debit/credit lines once for the whole batch.
 
-	Each head credits its payable in the **same account currency and amount** as
-	the expense debit (JPY↔JPY, TZS↔TZS). Payables must already match expense
-	currency via Costing.payable_account setup.
+	Each head: debit Costing.account, credit Costing.payable_account exactly as
+	stored on the Costing master — no account creation or remapping. Skip heads
+	missing either field. Party is set only when the selected payable_account's
+	account_type requires it (ERPNext Payable/Receivable rule).
 	"""
 	from collections import defaultdict
 
@@ -196,14 +354,19 @@ def _build_fixed_je_template(company, heads=None):
 	)
 	rate_cache = {}
 	acc_curr_cache = {}
+	acc_type_cache = {}
 	debit_lines = []
 	# payable → {curr, amt_in_acc, base, ex_rate}
 	payable_totals = defaultdict(lambda: {"curr": None, "amt": 0.0, "base": 0.0, "ex_rate": 1.0})
 	has_foreign = False
+	party_curr = None
+	if supplier:
+		party_curr = _party_account_currency("Supplier", supplier, company)
 
 	for h in heads:
 		amt = flt(h.default_projected_amount)
-		if amt <= 0 or not h.account or not h.payable_account:
+		payable_acc = (getattr(h, "payable_account", None) or "").strip()
+		if amt <= 0 or not h.account or not payable_acc:
 			continue
 		if h.account not in acc_curr_cache:
 			acc_curr_cache[h.account] = (
@@ -237,11 +400,11 @@ def _build_fixed_je_template(company, heads=None):
 		)
 
 		# Payable must mirror expense currency — convert only if setup is wrong
-		if h.payable_account not in acc_curr_cache:
-			acc_curr_cache[h.payable_account] = (
-				frappe.db.get_value("Account", h.payable_account, "account_currency") or comp_currency
+		if payable_acc not in acc_curr_cache:
+			acc_curr_cache[payable_acc] = (
+				frappe.db.get_value("Account", payable_acc, "account_currency") or comp_currency
 			)
-		pay_curr = acc_curr_cache[h.payable_account]
+		pay_curr = acc_curr_cache[payable_acc]
 		if pay_curr == acc_curr:
 			credit_in_acc = amt_in_acc
 			credit_base = base_amt
@@ -257,7 +420,7 @@ def _build_fixed_je_template(company, heads=None):
 				credit_rate = 1.0
 				credit_base = credit_in_acc
 
-		bucket = payable_totals[h.payable_account]
+		bucket = payable_totals[payable_acc]
 		bucket["curr"] = pay_curr
 		bucket["amt"] += flt(credit_in_acc)
 		bucket["base"] += flt(credit_base)
@@ -268,6 +431,18 @@ def _build_fixed_je_template(company, heads=None):
 	credit_lines = []
 	for payable_acc, tot in payable_totals.items():
 		pay_curr = tot["curr"] or comp_currency
+		if payable_acc not in acc_type_cache:
+			acc_type_cache[payable_acc] = (
+				frappe.db.get_value("Account", payable_acc, "account_type") or ""
+			)
+		acc_type = acc_type_cache[payable_acc]
+		# Party only when account_type requires it AND currencies match
+		required_party_type = None
+		if acc_type == "Payable":
+			if not party_curr or party_curr == pay_curr:
+				required_party_type = "Supplier"
+		elif acc_type == "Receivable":
+			required_party_type = "Customer"
 		credit_lines.append(
 			{
 				"account": payable_acc,
@@ -276,6 +451,7 @@ def _build_fixed_je_template(company, heads=None):
 				"account_currency": pay_curr,
 				"exchange_rate": tot["ex_rate"] if pay_curr != comp_currency else 1.0,
 				"cost_center": cost_center,
+				"required_party_type": required_party_type,
 			}
 		)
 
@@ -327,11 +503,6 @@ def create_or_update_fixed_costing_journal_entry(
 	if not company:
 		return None, False
 
-	if template is None:
-		template = _build_fixed_je_template(company)
-	if not template.get("ok"):
-		return None, False
-
 	if item_row is None:
 		item_row = frappe.db.get_value(
 			"Item",
@@ -344,6 +515,13 @@ def create_or_update_fixed_costing_journal_entry(
 	if not import_file:
 		return None, False
 
+	supplier = resolve_supplier_for_fixed_je(import_file=import_file, item_code=item_code)
+
+	if template is None:
+		template = _build_fixed_je_template(company, supplier=supplier)
+	if not template.get("ok"):
+		return None, False
+
 	cheque_no = f"FIXED|{item_code}"[:140]
 	existing = frappe.db.get_value(
 		"Journal Entry",
@@ -352,8 +530,14 @@ def create_or_update_fixed_costing_journal_entry(
 		as_dict=True,
 	)
 	if existing:
-		_set_je_item_links(existing.name, item_code, chassis, import_file)
-		return existing.name, False
+		expected_payables = {c.get("account") for c in (template.get("credit_lines") or [])}
+		if existing.docstatus == 0 and fixed_je_needs_recreate(
+			existing.name, supplier=supplier, expected_payables=expected_payables
+		):
+			frappe.delete_doc("Journal Entry", existing.name, force=1, ignore_permissions=True)
+		else:
+			_set_je_item_links(existing.name, item_code, chassis, import_file)
+			return existing.name, False
 
 	jv = frappe.new_doc("Journal Entry")
 	jv.name = _fixed_je_name(item_code)
@@ -373,10 +557,22 @@ def create_or_update_fixed_costing_journal_entry(
 	if frappe.db.has_column("Journal Entry", "custom_chassis_no"):
 		jv.custom_chassis_no = chassis
 
+	party_curr = _party_account_currency("Supplier", supplier, company) if supplier else None
+
 	for line in template["debit_lines"]:
 		jv.append("accounts", dict(line))
 	for line in template["credit_lines"]:
 		row = dict(line)
+		required_party_type = row.pop("required_party_type", None)
+		if required_party_type is None:
+			required_party_type = _account_party_type(row.get("account"))
+		if required_party_type == "Supplier" and supplier:
+			pay_curr = row.get("account_currency") or frappe.db.get_value(
+				"Account", row.get("account"), "account_currency"
+			)
+			if not party_curr or not pay_curr or party_curr == pay_curr:
+				row["party_type"] = "Supplier"
+				row["party"] = supplier
 		row["user_remark"] = f"Payable for Fixed Costing — {chassis or item_code}"
 		jv.append("accounts", row)
 
@@ -507,7 +703,10 @@ def ensure_fixed_costing_for_items(item_codes, auto_submit_jv=False, import_file
 	company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
 		"Global Defaults", "default_company"
 	)
-	template = _build_fixed_je_template(company) if company else {"ok": False}
+	batch_supplier = resolve_supplier_for_fixed_je(import_file=import_file) if import_file else None
+	template = (
+		_build_fixed_je_template(company, supplier=batch_supplier) if company else {"ok": False}
+	)
 
 	prev_in_import = getattr(frappe.flags, "in_import", False)
 	prev_mute = getattr(frappe.flags, "mute_messages", False)
@@ -632,10 +831,30 @@ def ensure_fixed_costing_for_items(item_codes, auto_submit_jv=False, import_file
 					cc_row.import_file = resolved
 
 				cheque_no = f"FIXED|{item_code}"[:140]
-				if cheque_no in existing_je:
-					# Already exists — do not rewrite links on every batch (was thousands of UPDATEs)
-					created_je.append(existing_je[cheque_no].name)
-				elif resolved and template.get("ok"):
+				existing_row = existing_je.get(cheque_no)
+				if existing_row:
+					expected_payables = {
+						c.get("account") for c in (template.get("credit_lines") or [])
+					}
+					batch_sup = batch_supplier or resolve_supplier_for_fixed_je(
+						import_file=resolved, item_code=item_code
+					)
+					if existing_row.docstatus == 0 and fixed_je_needs_recreate(
+						existing_row.name,
+						supplier=batch_sup,
+						expected_payables=expected_payables,
+					):
+						frappe.delete_doc(
+							"Journal Entry", existing_row.name, force=1, ignore_permissions=True
+						)
+						existing_je.pop(cheque_no, None)
+						pending_commit += 1
+					else:
+						# Already good — do not rewrite links on every batch
+						created_je.append(existing_row.name)
+						continue
+
+				if resolved and template.get("ok") and cheque_no not in existing_je:
 					je_name, is_new = create_or_update_fixed_costing_journal_entry(
 						item_code,
 						import_file=resolved,

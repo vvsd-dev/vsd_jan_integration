@@ -49,6 +49,41 @@ EXCEL_JAPAN_USD_CODES = {
 	"car_expense",
 }
 
+# Canonical Company → Tax Expense Accounts (+ GL).
+# Japan rows match MKT EXPENSE_FIELDS labels; TZS rows cover Costing heads
+# that are not created from the tax table alone (TRA, Wharfage, Fixed locals, …).
+# Tuple: (tax_name, currency, preferred_account_leaf_without_abbr)
+DEFAULT_TAX_EXPENSE_ACCOUNTS = [
+	# --- Japan / MKT Statement charges (JPY) ---
+	("THC", "JPY", "THC JPY"),
+	("Forwarding", "JPY", "Forwarding JPY"),
+	("Freight", "JPY", "Freight JPY"),
+	("Inspection", "JPY", "Inspection JPY"),
+	("JPN Expense", "JPY", "JPN Expense JPY"),
+	("Repair Cost", "JPY", "Repair Cost JPY"),
+	("Car Expense", "JPY", "Car Expense JPY"),
+	("Vanning", "JPY", "Vanning JPY"),
+	("Transportation", "JPY", "Transportation JPY"),
+	("Freight & Other", "JPY", "Freight & Other JPY"),
+	("Cont. Other Value", "JPY", "Cont. Other Value JPY"),
+	("Inv Other Charges", "JPY", "Inv Other Charges JPY"),
+	# --- Tanzania / other Costing expense GLs (company currency) ---
+	("TRA Duty", "TZS", "TRA Duty"),
+	("Wharfage", "TZS", "Wharfage"),
+	("TPA", "TZS", "TPA"),
+	("ICD", "TZS", "ICD"),
+	("Shipping Line", "TZS", "Shipping Line"),
+	("Clearing Container", "TZS", "Clearing Container"),
+	("Ex-Bond", "TZS", "Ex-Bond"),
+	("Car Service", "TZS", "Car Service"),
+	("Bond Insurance", "TZS", "Bond Insurance"),
+	("Driver Port to Yard", "TZS", "Driver Port to Yard"),
+	("Fuel Port to Yard", "TZS", "Fuel Port to Yard"),
+	("Repairing Charges Local", "TZS", "Repairing Charges Local"),
+	("City Levy Tax", "TZS", "City Levy Tax"),
+	("VAT Costing", "TZS", "VAT Costing"),
+]
+
 
 def _slug(label: str) -> str:
 	s = re.sub(r"[^a-zA-Z0-9]+", "_", (label or "").strip().lower()).strip("_")
@@ -245,37 +280,86 @@ def _ensure_payable_account(company: str, tax_name: str, currency: str | None = 
 		return frappe.db.get_value("Account", {"name": account_name, "company": company}, "name")
 
 
-def _ensure_expense_account(company: str, tax_name: str, currency: str, account: str | None) -> str | None:
+def _expense_account_candidates(company: str, tax_name: str, currency: str, preferred_leaf: str | None = None):
+	"""Possible Account.name values for a tax/costing expense leaf."""
+	abbr = frappe.db.get_value("Company", company, "abbr") or ""
+	comp_currency = frappe.db.get_value("Company", company, "default_currency") or "TZS"
+	currency = (currency or comp_currency).strip() or comp_currency
+	tax_name = (tax_name or "").strip()
+	preferred_leaf = (preferred_leaf or "").strip() or None
+	cands = []
+	if preferred_leaf:
+		cands.append(f"{preferred_leaf} - {abbr}" if abbr else preferred_leaf)
+	if currency == comp_currency:
+		cands.append(f"{tax_name} - {abbr}" if abbr else tax_name)
+	else:
+		cands.append(f"{tax_name} {currency} - {abbr}" if abbr else f"{tax_name} {currency}")
+		cands.append(f"{tax_name} - {abbr}" if abbr else tax_name)
+	# de-dupe preserve order
+	seen = set()
+	out = []
+	for c in cands:
+		if c and c not in seen:
+			seen.add(c)
+			out.append(c)
+	return out, currency, abbr, comp_currency
+
+
+def _ensure_expense_account(
+	company: str,
+	tax_name: str,
+	currency: str,
+	account: str | None,
+	preferred_leaf: str | None = None,
+) -> str | None:
+	"""Create/get expense GL for a tax/costing label.
+
+	Company-currency leaves: ``{Name} - ABBR`` (e.g. TRA Duty - JIL).
+	Foreign-currency leaves: ``{Name} {CUR} - ABBR`` (e.g. THC JPY - JIL).
+	"""
 	if account and frappe.db.exists("Account", account):
 		return account
 
-	abbr = frappe.db.get_value("Company", company, "abbr") or ""
-	currency = currency or "JPY"
-	label = f"{tax_name} {currency}".strip()
-	account_name = f"{label} - {abbr}" if abbr else label
-	if frappe.db.exists("Account", account_name):
-		return account_name
+	cands, currency, abbr, comp_currency = _expense_account_candidates(
+		company, tax_name, currency, preferred_leaf
+	)
+	for cand in cands:
+		if frappe.db.exists("Account", cand):
+			return cand
 
-	parent = (
-		frappe.db.get_value(
+	# Create under Vehicle Import Costing (TZ) or Japan expense group (JPY)
+	parent = None
+	if currency != comp_currency:
+		parent = frappe.db.get_value(
 			"Account",
 			{"company": company, "account_name": ["like", "%Japan%"], "is_group": 1, "root_type": "Expense"},
 			"name",
 			order_by="lft asc",
 		)
-		or frappe.db.get_value(
+	if not parent:
+		parent = frappe.db.get_value(
+			"Account",
+			{"company": company, "account_name": ["like", "%Vehicle Import Costing%"], "is_group": 1},
+			"name",
+			order_by="lft asc",
+		) or frappe.db.get_value(
 			"Account",
 			{"company": company, "root_type": "Expense", "is_group": 1},
 			"name",
 			order_by="lft desc",
 		)
-	)
 	if not parent:
 		return account
 
+	if currency == comp_currency:
+		leaf_name = tax_name
+	else:
+		leaf_name = preferred_leaf or f"{tax_name} {currency}"
+	account_name = f"{leaf_name} - {abbr}" if abbr else leaf_name
+
 	try:
 		acc = frappe.new_doc("Account")
-		acc.account_name = label
+		acc.account_name = leaf_name
 		acc.company = company
 		acc.parent_account = parent
 		acc.is_group = 0
@@ -287,6 +371,69 @@ def _ensure_expense_account(company: str, tax_name: str, currency: str, account:
 	except Exception:
 		frappe.log_error(title=f"Create expense {account_name}", message=frappe.get_traceback())
 		return frappe.db.get_value("Account", {"name": account_name, "company": company}, "name") or account
+
+
+def _seed_company_tax_expense_accounts(company: str) -> list[dict]:
+	"""Ensure Company.custom_tax_expense_accounts has all DEFAULT rows + GLs.
+
+	Writes child rows directly (avoids Company.on_update quirks). Does not remove
+	existing extra rows. Returns tax_rows for Costing sync.
+	"""
+	if not frappe.db.exists("DocType", "Company Tax Account"):
+		return []
+
+	_upsert_tax_rows_direct(company, DEFAULT_TAX_EXPENSE_ACCOUNTS)
+	frappe.db.commit()
+
+	return frappe.get_all(
+		"Company Tax Account",
+		filters={"parent": company, "parenttype": "Company"},
+		fields=["tax_name", "account", "account_currency", "idx"],
+		order_by="idx asc",
+	)
+
+
+def _upsert_tax_rows_direct(company: str, defaults: list) -> None:
+	"""Insert/update Company Tax Account children without saving Company doc."""
+	comp_currency = frappe.db.get_value("Company", company, "default_currency") or "TZS"
+	existing = {
+		(r.tax_name or "").strip().lower(): r
+		for r in frappe.get_all(
+			"Company Tax Account",
+			filters={"parent": company, "parenttype": "Company"},
+			fields=["name", "tax_name", "account", "account_currency"],
+		)
+	}
+	for idx, (tax_name, currency, preferred_leaf) in enumerate(defaults, start=1):
+		currency = currency or comp_currency
+		if currency == "TZS":
+			currency = comp_currency
+		account = _ensure_expense_account(company, tax_name, currency, None, preferred_leaf)
+		acc_currency = _account_currency(account, currency) if account else currency
+		key = tax_name.strip().lower()
+		row = existing.get(key)
+		if row:
+			updates = {}
+			if (not row.account or not frappe.db.exists("Account", row.account)) and account:
+				updates["account"] = account
+			if not (row.account_currency or "").strip():
+				updates["account_currency"] = acc_currency
+			if updates:
+				frappe.db.set_value("Company Tax Account", row.name, updates, update_modified=False)
+		else:
+			child = frappe.get_doc(
+				{
+					"doctype": "Company Tax Account",
+					"parent": company,
+					"parenttype": "Company",
+					"parentfield": "custom_tax_expense_accounts",
+					"tax_name": tax_name,
+					"account": account,
+					"account_currency": acc_currency,
+					"idx": 100 + idx,
+				}
+			)
+			child.insert(ignore_permissions=True)
 
 
 def _account_currency(account: str, fallback: str | None = None) -> str:
@@ -336,9 +483,12 @@ def execute():
 	if not company:
 		return
 
+	# 0) Ensure Company Tax Expense Accounts rows + expense GLs exist
+	#    (Japan MKT charges + Tanzania / other Costing expense accounts)
+	tax_rows = _seed_company_tax_expense_accounts(company)
+
 	# 1) Sync Tax Expense Accounts → Costing (+ payables)
-	tax_rows = []
-	if frappe.db.exists("DocType", "Company Tax Account"):
+	if not tax_rows and frappe.db.exists("DocType", "Company Tax Account"):
 		tax_rows = frappe.get_all(
 			"Company Tax Account",
 			filters={"parent": company, "parenttype": "Company"},
@@ -352,7 +502,21 @@ def execute():
 		if not tax_name:
 			continue
 		acc_currency = (row.account_currency or "").strip() or "JPY"
-		account = _ensure_expense_account(company, tax_name, acc_currency, (row.account or "").strip() or None)
+		# Prefer preferred_leaf from DEFAULT list when recreating
+		preferred = None
+		for tn, cur, leaf in DEFAULT_TAX_EXPENSE_ACCOUNTS:
+			if tn.strip().lower() == tax_name.lower():
+				preferred = leaf
+				if not (row.account_currency or "").strip():
+					acc_currency = cur
+				break
+		account = _ensure_expense_account(
+			company,
+			tax_name,
+			acc_currency,
+			(row.account or "").strip() or None,
+			preferred_leaf=preferred,
+		)
 		if not account or not frappe.db.exists("Account", account):
 			frappe.log_error(
 				title=f"Tax Costing skip {tax_name}",

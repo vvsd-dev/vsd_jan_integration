@@ -281,19 +281,16 @@ def execute():
 			else:
 				data["account"] = _ensure_account(account_name)
 
-		# Fixed / Selling formula heads need payable_account set on Costing
-		# (selected by user / prior data). Do not invent Other Payable leaves.
-		needs_payable = data.get("entry_mode") in ("Fixed", "Formula") and data.get("costing_side") in (
-			"Selling",
-			"Both",
-			"Purchase",
-		)
-		# Only attach an existing named payable if already present in COA —
-		# never create or remap Creditors → Other Payable here.
-		if needs_payable and not data.get("payable_account"):
+		# Ensure named Other Payable for every active head (Fixed / Formula / Variable).
+		# Creates GL under Other Payable when missing — same helper as tax-accounts patch.
+		if not data.get("payable_account"):
 			existing_pay = _existing_named_payable_for_head(data)
 			if existing_pay:
 				data["payable_account"] = existing_pay
+			else:
+				created_pay = _create_named_payable_for_head(data)
+				if created_pay:
+					data["payable_account"] = created_pay
 
 		if frappe.db.exists("Costing", data["costing_code"]):
 			# Keep document name = costing_code; set labels via db_set to avoid rename side-effects
@@ -304,7 +301,7 @@ def execute():
 				# Never overwrite a user-selected payable_account with seed invent
 				if key == "payable_account":
 					cur_pay = frappe.db.get_value("Costing", name, "payable_account") or ""
-					if cur_pay:
+					if cur_pay and frappe.db.exists("Account", cur_pay):
 						continue
 				frappe.db.set_value("Costing", name, key, val, update_modified=False)
 			frappe.db.set_value("Costing", name, "disabled", 0, update_modified=False)
@@ -327,30 +324,35 @@ def execute():
 
 
 def _existing_named_payable_for_head(data):
-	"""Return an already-existing named payable Account if present — never create.
-
-	Looks up ``{Costing Name} Payable - {ABBR}`` only. Fixed Costing JEs use
-	whatever is stored on Costing.payable_account; seed must not invent COA leaves.
-	"""
+	"""Return an already-existing named payable Account if present."""
 	label = (data.get("costing_name") or data.get("costing_code") or "").strip()
 	if not label:
 		return None
-	# Title-case words for Accouns like "Bond Fee Payable - JIL"
 	words = label.replace("_", " ").split()
 	title = " ".join(w.capitalize() for w in words)
-	candidate = f"{title} Payable - {ABBR}"
-	if frappe.db.exists("Account", candidate):
-		return candidate
-	# Also try exact costing_name + Payable
-	candidate2 = f"{label.title()} Payable - {ABBR}" if label != title else None
-	if candidate2 and frappe.db.exists("Account", candidate2):
-		return candidate2
+	for candidate in (
+		f"{title} Payable - {ABBR}",
+		f"{label.title()} Payable - {ABBR}",
+		f"{label} Payable - {ABBR}",
+	):
+		if frappe.db.exists("Account", candidate):
+			return candidate
 	return None
 
 
-def _default_payable_account():
-	"""Deprecated — Fixed Costing uses Costing.payable_account as selected.
+def _create_named_payable_for_head(data):
+	"""Create named Other Payable for this Costing head (currency = expense account)."""
+	from vsd_jan_integration.patches.seed_costing_from_tax_accounts import (
+		_ensure_payable_account,
+		_account_currency,
+	)
 
-	Kept for any external callers; returns None so seed never invents payables.
-	"""
-	return None
+	label = (data.get("costing_name") or data.get("costing_code") or "").strip()
+	if not label:
+		return None
+	company = data.get("company") or COMPANY
+	exp = data.get("account")
+	currency = _account_currency(exp, data.get("currency") or "TZS") if exp else (
+		data.get("currency") or "TZS"
+	)
+	return _ensure_payable_account(company, label, currency)

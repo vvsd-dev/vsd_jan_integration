@@ -11,14 +11,14 @@ app_license = "mit"
 # required_apps = []
 
 # Each item in the list will be shown as an app in the apps page
-add_to_apps_screen = [
-	{
-		"name": "vsd_jan_integration",
-		"logo": "/assets/vsd_jan_integration/jan_ui/vvsdtz_logo.png",
-		"title": "Jan UI",
-		"route": "/jan_ui",
-	}
-]
+# add_to_apps_screen = [
+# 	{
+# 		"name": "vsd_jan_integration",
+# 		"logo": "/assets/vsd_jan_integration/jan_ui/vvsdtz_logo.png",
+# 		"title": "Jan UI",
+# 		"route": "/jan_ui",
+# 	}
+# ]
 
 website_route_rules = [
 	{"from_route": "/jan_ui/<path:app_path>", "to_route": "jan_ui"},
